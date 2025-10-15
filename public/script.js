@@ -263,7 +263,9 @@ class WeatherApp {
             const data = await response.json();
 
             if (data.success) {
-                this.displayAIResponse(data.data.aiResponse);
+                // Handle different response structures
+                const aiResponse = data.response || data.data?.aiResponse || data.data;
+                this.displayAIResponse(aiResponse);
             } else {
                 this.showAIError(data.error);
             }

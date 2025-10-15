@@ -62,6 +62,17 @@ class WeatherAgent {
       };
     }
 
+    // If weather query but no city provided, ask for city
+    if (isWeatherQuery && (!city || city.trim() === '')) {
+      return {
+        success: false,
+        error: isHindi ? 
+          "कृपया अपना शहर का नाम बताएं! 🏙️ जैसे: 'Delhi', 'Mumbai', 'Bangalore'" :
+          "Please provide your city name! 🏙️ For example: 'Delhi', 'Mumbai', 'Bangalore'",
+        needsCity: true
+      };
+    }
+
     // Get weather data
     const weatherData = await this.getCurrentWeather(city);
     if (!weatherData.success) {
@@ -703,6 +714,14 @@ class WeatherAgent {
   async getCoordinates(city) {
     try {
       const axios = require('axios');
+      
+      // Validate city input
+      if (!city || typeof city !== 'string' || city.trim() === '') {
+        return {
+          success: false,
+          error: 'Please provide a valid city name.'
+        };
+      }
       
       // Enhanced geocoding with better search parameters for Google-like accuracy
       const response = await axios.get(this.geoApiUrl, {
