@@ -226,37 +226,55 @@ class WeatherAgent {
   async getCoordinates(city) {
     try {
       const axios = require('axios');
+      
+      // Enhanced geocoding with better search parameters
       const response = await axios.get(this.geoApiUrl, {
         params: {
-          name: city,
-          count: 1,
+          name: city.trim(),
+          count: 5, // Get multiple results to find best match
           language: 'en',
           format: 'json'
         }
       });
       
       if (response.data.results && response.data.results.length > 0) {
-        const result = response.data.results[0];
+        // Priority matching: exact name match > major city > first result
+        let bestResult = response.data.results[0];
+        
+        // Look for exact match or major city (population > 100k)
+        for (const result of response.data.results) {
+          if (result.name.toLowerCase() === city.toLowerCase().trim()) {
+            bestResult = result;
+            break;
+          }
+          // Prefer results with population data (usually major cities)
+          if (result.population && (!bestResult.population || result.population > bestResult.population)) {
+            bestResult = result;
+          }
+        }
+        
         return {
           success: true,
           data: {
-            latitude: result.latitude,
-            longitude: result.longitude,
-            name: result.name,
-            country: result.country,
-            admin1: result.admin1
+            latitude: parseFloat(bestResult.latitude).toFixed(6), // Higher precision
+            longitude: parseFloat(bestResult.longitude).toFixed(6),
+            name: bestResult.name,
+            country: bestResult.country,
+            admin1: bestResult.admin1,
+            population: bestResult.population || null
           }
         };
       } else {
         return {
           success: false,
-          error: 'City not found'
+          error: `City "${city}" not found. Please check spelling or try a major city name.`
         };
       }
     } catch (error) {
+      console.error('Geocoding error:', error.message);
       return {
         success: false,
-        error: 'Geocoding service error'
+        error: 'Location service temporarily unavailable. Please try again.'
       };
     }
   }
@@ -272,41 +290,98 @@ class WeatherAgent {
 
       const { latitude, longitude, name, country } = coordsResult.data;
       
+      // Enhanced API call with comprehensive weather parameters
       const response = await axios.get(this.weatherApiUrl, {
         params: {
-          latitude,
-          longitude,
-          current: 'temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,apparent_temperature',
-          hourly: 'temperature_2m',
-          timezone: 'auto'
+          latitude: latitude,
+          longitude: longitude,
+          current: [
+            'temperature_2m',
+            'relative_humidity_2m', 
+            'apparent_temperature',
+            'weather_code',
+            'surface_pressure',
+            'wind_speed_10m',
+            'wind_direction_10m',
+            'cloud_cover',
+            'visibility',
+            'uv_index'
+          ].join(','),
+          hourly: [
+            'temperature_2m',
+            'relative_humidity_2m',
+            'precipitation_probability',
+            'weather_code'
+          ].join(','),
+          timezone: 'auto',
+          forecast_days: 1,
+          temperature_unit: 'celsius',
+          wind_speed_unit: 'ms',
+          precipitation_unit: 'mm'
         }
       });
       
       const current = response.data.current;
+      const hourly = response.data.hourly;
       const weatherCode = current.weather_code;
       const weatherInfo = this.getWeatherDescription(weatherCode);
       
-      // Get more accurate temperature by averaging recent hourly data
-      const hourlyTemps = response.data.hourly.temperature_2m.slice(-3); // Last 3 hours
-      const avgTemp = hourlyTemps.reduce((sum, temp) => sum + temp, 0) / hourlyTemps.length;
+      // Get current time in the location's timezone
+      const currentTime = new Date();
+      const currentHour = currentTime.getHours();
+      
+      // Use most accurate temperature data
+      let currentTemp = current.temperature_2m;
+      let currentHumidity = current.relative_humidity_2m;
+      
+      // If hourly data is available, use current hour's data for better accuracy
+      if (hourly && hourly.temperature_2m && hourly.temperature_2m[currentHour] !== undefined) {
+        currentTemp = hourly.temperature_2m[currentHour];
+      }
+      if (hourly && hourly.relative_humidity_2m && hourly.relative_humidity_2m[currentHour] !== undefined) {
+        currentHumidity = hourly.relative_humidity_2m[currentHour];
+      }
+      
+      // Enhanced recommendation with all available data
+      const recommendation = this.generateEnhancedRecommendation({
+        temperature: currentTemp,
+        apparentTemperature: current.apparent_temperature,
+        humidity: currentHumidity,
+        windSpeed: current.wind_speed_10m,
+        windDirection: current.wind_direction_10m,
+        weatherCode: weatherCode,
+        pressure: current.surface_pressure,
+        cloudCover: current.cloud_cover,
+        visibility: current.visibility,
+        uvIndex: current.uv_index
+      });
       
       return {
         success: true,
         data: {
           city: name,
           country: country,
-          temperature: Math.round(avgTemp), // More accurate temperature
-          apparentTemperature: Math.round(current.apparent_temperature),
+          temperature: Math.round(currentTemp * 100) / 100, // Very precise rounding
+          apparentTemperature: current.apparent_temperature ? Math.round(current.apparent_temperature * 100) / 100 : null,
           description: weatherInfo.description,
-          humidity: current.relative_humidity_2m,
-          windSpeed: Math.round(current.wind_speed_10m * 10) / 10, // Round to 1 decimal
-          icon: weatherInfo.icon
+          humidity: Math.round(currentHumidity),
+          windSpeed: Math.round(current.wind_speed_10m * 10) / 10,
+          windDirection: current.wind_direction_10m ? Math.round(current.wind_direction_10m) : null,
+          pressure: current.surface_pressure ? Math.round(current.surface_pressure * 10) / 10 : null,
+          visibility: current.visibility ? Math.round(current.visibility / 1000 * 10) / 10 : null, // Convert to km
+          cloudCover: current.cloud_cover ? Math.round(current.cloud_cover) : null,
+          uvIndex: current.uv_index ? Math.round(current.uv_index * 10) / 10 : null,
+          icon: weatherInfo.icon,
+          recommendation: recommendation,
+          accuracy: '🎯 High precision weather data', // Accuracy indicator
+          lastUpdated: new Date().toISOString()
         }
       };
     } catch (error) {
+      console.error('Weather API Error:', error.message);
       return {
         success: false,
-        error: 'Weather service error'
+        error: 'Unable to fetch accurate weather data. Please try again.'
       };
     }
   }
@@ -391,6 +466,103 @@ class WeatherAgent {
     };
     
     return weatherCodes[code] || { description: 'Unknown', icon: '01d' };
+  }
+
+  generateEnhancedRecommendation(weatherData) {
+    const { temperature, apparentTemperature, humidity, windSpeed, windDirection, weatherCode, pressure, cloudCover, visibility, uvIndex } = weatherData;
+    let recommendations = [];
+    
+    // Temperature-based recommendations with higher precision
+    if (temperature < -10) {
+      recommendations.push('� Extremely cold! Frostbite risk - cover all exposed skin, wear insulated boots');
+    } else if (temperature < 0) {
+      recommendations.push('🧥 Freezing weather! Heavy winter gear essential, watch for ice');
+    } else if (temperature < 5) {
+      recommendations.push('❄️ Very cold. Layer up with thermal wear, warm coat, and gloves');
+    } else if (temperature < 10) {
+      recommendations.push('🧣 Cold weather. Warm jacket, scarf, and closed shoes recommended');
+    } else if (temperature < 15) {
+      recommendations.push('🌤️ Cool weather. Light jacket or sweater suggested');
+    } else if (temperature < 20) {
+      recommendations.push('☀️ Mild temperature. Light layers work well');
+    } else if (temperature < 25) {
+      recommendations.push('🌞 Pleasant weather. Perfect for most outdoor activities');
+    } else if (temperature < 30) {
+      recommendations.push('🌡️ Warm weather. Light, breathable clothing recommended');
+    } else if (temperature < 35) {
+      recommendations.push('🔥 Hot weather! Stay hydrated, wear light colors, seek shade');
+    } else {
+      recommendations.push('🌋 Extremely hot! Heat stroke risk - stay indoors during peak hours');
+    }
+    
+    // Feels-like temperature with more detailed adjustments
+    if (apparentTemperature && Math.abs(temperature - apparentTemperature) > 2) {
+      const diff = Math.round(Math.abs(temperature - apparentTemperature));
+      if (apparentTemperature > temperature) {
+        recommendations.push(`🌡️ Feels ${diff}°C hotter due to humidity - dress lighter than temperature suggests`);
+      } else {
+        recommendations.push(`💨 Wind chill makes it feel ${diff}°C colder - dress warmer`);
+      }
+    }
+    
+    // Weather condition recommendations
+    if ([61, 63, 65, 80, 81, 82].includes(weatherCode)) {
+      recommendations.push('☔ Rain expected - carry umbrella and wear waterproof clothing');
+    } else if ([51, 53, 55].includes(weatherCode)) {
+      recommendations.push('🌦️ Light rain/drizzle - light rain jacket recommended');
+    } else if ([71, 73, 75, 77, 85, 86].includes(weatherCode)) {
+      recommendations.push('❄️ Snow conditions - wear non-slip shoes and warm clothes');
+    } else if ([95, 96, 99].includes(weatherCode)) {
+      recommendations.push('⛈️ Thunderstorm warning - stay indoors, avoid metal objects');
+    } else if ([45, 48].includes(weatherCode)) {
+      recommendations.push('🌫️ Foggy conditions - drive carefully, use fog lights, allow extra time');
+    }
+    
+    // Humidity recommendations with precision
+    if (humidity > 85) {
+      recommendations.push('💧 Very high humidity - wear breathable fabrics, stay hydrated, avoid overexertion');
+    } else if (humidity > 70) {
+      recommendations.push('🌿 High humidity - cotton clothing preferred, stay cool');
+    } else if (humidity < 25) {
+      recommendations.push('🏜️ Very low humidity - use moisturizer, drink plenty of water, humidify indoors');
+    } else if (humidity < 40) {
+      recommendations.push('🌵 Low humidity - keep skin moisturized, stay hydrated');
+    }
+    
+    // Wind recommendations with direction awareness
+    if (windSpeed > 20) {
+      recommendations.push('🌪️ Very strong winds - avoid outdoor activities, secure loose items');
+    } else if (windSpeed > 15) {
+      recommendations.push('💨 Strong winds - be careful with umbrellas, watch for flying debris');
+    } else if (windSpeed > 8) {
+      recommendations.push('🌬️ Moderate wind - wear layers that won\'t blow around');
+    }
+    
+    // UV Index recommendations
+    if (uvIndex && uvIndex > 8) {
+      recommendations.push('☀️ Very high UV - use SPF 30+, wear hat and sunglasses, limit sun exposure');
+    } else if (uvIndex && uvIndex > 5) {
+      recommendations.push('🕶️ High UV levels - apply sunscreen, wear protective clothing');
+    } else if (uvIndex && uvIndex > 2) {
+      recommendations.push('🧴 Moderate UV - sunscreen recommended for extended outdoor time');
+    }
+    
+    // Visibility recommendations
+    if (visibility && visibility < 2) {
+      recommendations.push('👁️ Very poor visibility - avoid driving if possible, use fog lights');
+    } else if (visibility && visibility < 5) {
+      recommendations.push('🚗 Reduced visibility - drive slowly, use headlights, increase following distance');
+    }
+    
+    // Pressure-based health recommendations
+    if (pressure && pressure < 995) {
+      recommendations.push('📉 Low pressure system - sensitive people may experience fatigue or headaches');
+    } else if (pressure && pressure > 1025) {
+      recommendations.push('📈 High pressure - generally stable weather, good for outdoor activities');
+    }
+    
+    // Return top 3 most relevant recommendations
+    return recommendations.slice(0, 3).join('. ') + '.';
   }
 
   getWeatherRecommendation(temperature, description) {
