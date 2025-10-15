@@ -28,18 +28,25 @@ class WeatherAgent {
     this.airQualityUrl = 'https://air-quality-api.open-meteo.com/v1/air-quality';
   }
 
-  // AI Weather Assistant
+  // AI Weather Assistant - Enhanced & Comprehensive
   async processWeatherQuery(query, city) {
     const weatherKeywords = {
-      temperature: ['temperature', 'temp', 'hot', 'cold', 'warm', 'cool', 'degree'],
-      rain: ['rain', 'raining', 'wet', 'precipitation', 'shower', 'drizzle'],
-      wind: ['wind', 'windy', 'breeze', 'gust'],
-      humidity: ['humidity', 'humid', 'moisture', 'dry'],
-      forecast: ['tomorrow', 'week', 'forecast', 'future', 'next', 'upcoming'],
-      clothing: ['wear', 'clothes', 'dress', 'outfit', 'jacket', 'umbrella'],
-      activities: ['outdoor', 'picnic', 'travel', 'sport', 'exercise', 'walk'],
-      comparison: ['compare', 'vs', 'difference', 'better', 'warmer', 'colder']
+      temperature: ['temperature', 'temp', 'hot', 'cold', 'warm', 'cool', 'degree', 'celsius', 'fahrenheit', 'garam', 'thanda', 'thandak', 'गर्म', 'ठंडा', 'तापमान'],
+      rain: ['rain', 'raining', 'wet', 'precipitation', 'shower', 'drizzle', 'barish', 'pani', 'baarish', 'storm', 'बारिश', 'पानी', 'बरसात'],
+      wind: ['wind', 'windy', 'breeze', 'gust', 'hawa', 'storm', 'cyclone', 'typhoon', 'हवा', 'तूफान'],
+      humidity: ['humidity', 'humid', 'moisture', 'dry', 'damp', 'sticky', 'muggy', 'नमी', 'सूखा', 'नम'],
+      forecast: ['tomorrow', 'week', 'forecast', 'future', 'next', 'upcoming', 'kal', 'agle', 'भविष्य', 'कल', 'आगे'],
+      clothing: ['wear', 'clothes', 'dress', 'outfit', 'jacket', 'umbrella', 'kapde', 'पहनना', 'कपड़े', 'छाता'],
+      activities: ['outdoor', 'picnic', 'travel', 'sport', 'exercise', 'walk', 'cricket', 'football', 'घूमना', 'खेल', 'यात्रा'],
+      comparison: ['compare', 'vs', 'difference', 'better', 'warmer', 'colder', 'तुलना', 'अंतर', 'बेहतर'],
+      health: ['health', 'UV', 'skin', 'protection', 'sunscreen', 'allergies', 'asthma', 'स्वास्थ्य', 'सुरक्षा'],
+      agriculture: ['farming', 'crops', 'plants', 'garden', 'soil', 'irrigation', 'खेती', 'फसल', 'पौधे', 'मिट्टी'],
+      aviation: ['flying', 'flight', 'airplane', 'turbulence', 'pilot', 'aviation', 'उड़ान', 'हवाई जहाज'],
+      general: ['weather', 'climate', 'condition', 'mausam', 'मौसम', 'हवा', 'आसमान', 'sky', 'atmosphere']
     };
+
+    // Enhanced language detection
+    const isHindi = query.match(/[अ-ह]/) || ['garam', 'thanda', 'barish', 'mausam', 'hawa'].some(w => query.toLowerCase().includes(w));
 
     // Check if query is weather-related
     const isWeatherQuery = Object.values(weatherKeywords).some(keywords =>
@@ -49,7 +56,9 @@ class WeatherAgent {
     if (!isWeatherQuery && !city) {
       return {
         success: false,
-        error: "I'm a weather assistant! Please ask me about weather, temperature, rain, or weather-related activities. 🌤️"
+        error: isHindi ? 
+          "मैं एक advanced weather assistant हूँ! 🌤️ मुझसे मौसम, तापमान, बारिश, कृषि, स्वास्थ्य या weather-related सवाल पूछें।" :
+          "I'm an advanced weather assistant! 🌤️ Ask me about weather, temperature, rain, agriculture, health, aviation, or any weather-related questions."
       };
     }
 
@@ -59,8 +68,406 @@ class WeatherAgent {
       return weatherData;
     }
 
-    // Generate AI response based on query type
-    return this.generateIntelligentResponse(query, weatherData.data, weatherKeywords);
+    // Generate Enhanced AI response based on query type
+    return this.generateAdvancedIntelligentResponse(query, weatherData.data, weatherKeywords, isHindi);
+  }
+
+  generateAdvancedIntelligentResponse(query, weatherData, keywords, isHindi) {
+    const queryLower = query.toLowerCase();
+    
+    // Smart greeting based on language and time
+    const timeGreeting = weatherData.isDay ? 
+      (isHindi ? '☀️ नमस्ते!' : '☀️ Hello!') :
+      (isHindi ? '🌙 नमस्कार!' : '🌙 Good evening!');
+    
+    let response = isHindi ?
+      `${timeGreeting} **${weatherData.city}, ${weatherData.country} का स्मार्ट मौसम विश्लेषण** 🤖\n\n` :
+      `${timeGreeting} **Smart Weather Analysis for ${weatherData.city}, ${weatherData.country}** 🤖\n\n`;
+
+    // Enhanced core weather info
+    response += isHindi ?
+      `📊 **मुख्य मौसम जानकारी:**\n` +
+      `🌡️ तापमान: ${weatherData.temperature}°C (महसूस: ${weatherData.feelsLike}°C)\n` +
+      `🌤️ स्थिति: ${weatherData.description}\n` +
+      `💧 नमी: ${weatherData.humidity}%\n` +
+      `💨 हवा: ${weatherData.windSpeed} km/h\n\n` :
+      `📊 **Current Weather Overview:**\n` +
+      `🌡️ Temperature: ${weatherData.temperature}°C (Feels like: ${weatherData.feelsLike}°C)\n` +
+      `🌤️ Condition: ${weatherData.description}\n` +
+      `💧 Humidity: ${weatherData.humidity}%\n` +
+      `💨 Wind: ${weatherData.windSpeed} km/h\n\n`;
+
+    // Add advanced data if available
+    if (weatherData.advancedData && Object.keys(weatherData.advancedData).length > 0) {
+      const advanced = weatherData.advancedData;
+      response += isHindi ? `🔬 **एडवांस्ड मेट्रिक्स:**\n` : `🔬 **Advanced Metrics:**\n`;
+      
+      if (advanced.soilTemperature) {
+        response += isHindi ? 
+          `🌱 मिट्टी का तापमान: ${advanced.soilTemperature}°C\n` :
+          `🌱 Soil temperature: ${advanced.soilTemperature}°C\n`;
+      }
+      
+      if (advanced.highAltitudeWindSpeed) {
+        response += isHindi ?
+          `🏔️ ऊंचाई पर हवा: ${advanced.highAltitudeWindSpeed} km/h\n` :
+          `🏔️ High altitude wind: ${advanced.highAltitudeWindSpeed} km/h\n`;
+      }
+      
+      if (advanced.soilCondition) {
+        response += isHindi ?
+          `🌾 मिट्टी की स्थिति: ${advanced.soilCondition}\n` :
+          `🌾 Soil condition: ${advanced.soilCondition}\n`;
+      }
+      
+      response += '\n';
+    }
+
+    // Enhanced category-specific responses
+    if (keywords.temperature.some(k => queryLower.includes(k))) {
+      response += isHindi ? `🌡️ **तापमान विश्लेषण:**\n` : `🌡️ **Temperature Analysis:**\n`;
+      response += this.getEnhancedTemperatureAnalysis(weatherData.temperature, weatherData.feelsLike, isHindi);
+    }
+
+    if (keywords.rain.some(k => queryLower.includes(k))) {
+      response += isHindi ? `🌧️ **बारिश की जानकारी:**\n` : `🌧️ **Rain Information:**\n`;
+      response += this.getEnhancedRainAnalysis(weatherData.description, isHindi);
+    }
+
+    if (keywords.wind.some(k => queryLower.includes(k))) {
+      response += isHindi ? `💨 **हवा का विश्लेषण:**\n` : `💨 **Wind Analysis:**\n`;
+      response += this.getEnhancedWindAnalysis(weatherData.windSpeed, weatherData.advancedData, isHindi);
+    }
+
+    if (keywords.humidity.some(k => queryLower.includes(k))) {
+      response += isHindi ? `💧 **नमी विश्लेषण:**\n` : `💧 **Humidity Analysis:**\n`;
+      response += this.getEnhancedHumidityAnalysis(weatherData.humidity, isHindi);
+    }
+
+    if (keywords.clothing.some(k => queryLower.includes(k))) {
+      response += isHindi ? `👕 **कपड़ों की सलाह:**\n` : `👕 **Clothing Recommendations:**\n`;
+      response += this.getEnhancedClothingAdvice(weatherData, isHindi);
+    }
+
+    if (keywords.activities.some(k => queryLower.includes(k))) {
+      response += isHindi ? `🏃 **गतिविधि सुझाव:**\n` : `🏃 **Activity Suggestions:**\n`;
+      response += this.getEnhancedActivitySuggestions(weatherData, isHindi);
+    }
+
+    if (keywords.health.some(k => queryLower.includes(k))) {
+      response += isHindi ? `🏥 **स्वास्थ्य सलाह:**\n` : `🏥 **Health Recommendations:**\n`;
+      response += this.getHealthRecommendations(weatherData, isHindi);
+    }
+
+    if (keywords.agriculture.some(k => queryLower.includes(k))) {
+      response += isHindi ? `🌾 **कृषि सलाह:**\n` : `🌾 **Agriculture Advice:**\n`;
+      response += this.getAgricultureAdvice(weatherData, isHindi);
+    }
+
+    if (keywords.aviation.some(k => queryLower.includes(k))) {
+      response += isHindi ? `✈️ **उड्डयन जानकारी:**\n` : `✈️ **Aviation Information:**\n`;
+      response += this.getAviationInfo(weatherData, isHindi);
+    }
+
+    // If no specific category, provide comprehensive overview
+    if (!Object.values(keywords).some(keywordList => 
+        keywordList.some(k => queryLower.includes(k)))) {
+      response += isHindi ? `**सामान्य सलाह:**\n` : `**General Recommendations:**\n`;
+      response += weatherData.recommendation + '\n';
+    }
+
+    // Add professional insights
+    response += isHindi ?
+      `\n🎯 **प्रोफेशनल इनसाइट्स:**\n` +
+      `📍 स्थान: ${weatherData.coordinates}\n` +
+      `🎯 सटीकता: Google Weather compatible data\n` +
+      `⏰ अपडेट: ${weatherData.lastUpdated}\n` +
+      `🔍 विस्तृत जानकारी: /api/weather/compare/${weatherData.city}\n\n` +
+      `💡 मुझसे कोई भी weather-related सवाल पूछें!\n` :
+      `\n🎯 **Professional Insights:**\n` +
+      `📍 Location: ${weatherData.coordinates}\n` +
+      `🎯 Accuracy: Google Weather compatible data\n` +
+      `⏰ Updated: ${weatherData.lastUpdated}\n` +
+      `🔍 Detailed analysis: /api/weather/compare/${weatherData.city}\n\n` +
+      `💡 Ask me any weather-related questions!\n`;
+
+    return {
+      success: true,
+      response: response,
+      confidence: 95,
+      language: isHindi ? 'hindi' : 'english',
+      categories: Object.keys(keywords).filter(category => 
+        keywords[category].some(k => queryLower.includes(k))
+      ),
+      advancedFeatures: true
+    };
+  }
+
+  // Enhanced analysis functions with bilingual support
+  getEnhancedTemperatureAnalysis(temp, feelsLike, isHindi) {
+    const tempDiff = Math.abs(temp - feelsLike);
+    let analysis = '';
+    
+    if (temp <= 5) {
+      analysis = isHindi ? 
+        `❄️ बहुत ठंड! Heavy winter clothing जरूरी है।\n` :
+        `❄️ Very cold! Heavy winter clothing essential.\n`;
+    } else if (temp <= 15) {
+      analysis = isHindi ?
+        `🧥 ठंड है। Jacket या sweater पहनें।\n` :
+        `🧥 Cold weather. Wear jacket or sweater.\n`;
+    } else if (temp <= 25) {
+      analysis = isHindi ?
+        `😊 सुखद तापमान! Outdoor activities के लिए perfect।\n` :
+        `😊 Pleasant temperature! Perfect for outdoor activities.\n`;
+    } else if (temp <= 35) {
+      analysis = isHindi ?
+        `☀️ गर्म है। Light cotton clothes पहनें।\n` :
+        `☀️ Warm weather. Wear light cotton clothes.\n`;
+    } else {
+      analysis = isHindi ?
+        `🔥 बहुत गर्म! AC, shade, और बहुत पानी।\n` :
+        `🔥 Very hot! Stay in AC, shade, drink lots of water.\n`;
+    }
+    
+    if (tempDiff > 5) {
+      analysis += isHindi ?
+        `⚠️ Real feel ${feelsLike}°C है - humidity/wind के कारण अलग लगता है।\n` :
+        `⚠️ Feels like ${feelsLike}°C - humidity/wind makes it feel different.\n`;
+    }
+    
+    return analysis + '\n';
+  }
+
+  getEnhancedRainAnalysis(description, isHindi) {
+    const isRainy = description.toLowerCase().includes('rain') || 
+                   description.toLowerCase().includes('drizzle');
+    
+    if (isRainy) {
+      return isHindi ?
+        `☔ हाँ, बारिश हो रही है!\n` +
+        `🌂 Waterproof umbrella ज़रूर लें\n` +
+        `👟 Non-slip shoes पहनें\n` +
+        `🚗 Driving में extra सावधानी बरतें\n\n` :
+        `☔ Yes, it's raining!\n` +
+        `🌂 Take waterproof umbrella\n` +
+        `👟 Wear non-slip shoes\n` +
+        `🚗 Drive with extra caution\n\n`;
+    } else {
+      return isHindi ?
+        `☀️ अभी बारिश नहीं हो रही\n` +
+        `😊 Outdoor activities safe हैं\n\n` :
+        `☀️ No rain currently\n` +
+        `😊 Outdoor activities are safe\n\n`;
+    }
+  }
+
+  getEnhancedWindAnalysis(windSpeed, advancedData, isHindi) {
+    let analysis = '';
+    
+    if (windSpeed <= 5) {
+      analysis = isHindi ? 
+        `🌸 हल्की हवा - शांत मौसम\n` :
+        `🌸 Light breeze - calm conditions\n`;
+    } else if (windSpeed <= 15) {
+      analysis = isHindi ? 
+        `💨 अच्छी हवा - सुखद\n` :
+        `💨 Good wind - pleasant\n`;
+    } else if (windSpeed <= 30) {
+      analysis = isHindi ? 
+        `🌪️ तेज हवा - सावधानी बरतें\n` :
+        `🌪️ Strong wind - be cautious\n`;
+    } else {
+      analysis = isHindi ? 
+        `⚠️ बहुत तेज हवा - indoor रहें\n` :
+        `⚠️ Very strong wind - stay indoors\n`;
+    }
+    
+    // Add high altitude wind data if available
+    if (advancedData && advancedData.highAltitudeWindSpeed) {
+      analysis += isHindi ?
+        `🏔️ ऊंचाई पर हवा: ${advancedData.highAltitudeWindSpeed} km/h\n` :
+        `🏔️ High altitude wind: ${advancedData.highAltitudeWindSpeed} km/h\n`;
+    }
+    
+    return analysis + '\n';
+  }
+
+  getEnhancedHumidityAnalysis(humidity, isHindi) {
+    let analysis = '';
+    
+    if (humidity <= 30) {
+      analysis = isHindi ?
+        `🏜️ कम नमी - skin moisturizer use करें\n` +
+        `💧 Extra पानी पिएं\n` :
+        `🏜️ Low humidity - use skin moisturizer\n` +
+        `💧 Drink extra water\n`;
+    } else if (humidity <= 60) {
+      analysis = isHindi ?
+        `😊 आदर्श नमी - comfortable conditions\n` :
+        `😊 Ideal humidity - comfortable conditions\n`;
+    } else if (humidity <= 80) {
+      analysis = isHindi ?
+        `💦 अधिक नमी - breathable cotton clothes\n` :
+        `💦 High humidity - breathable cotton clothes\n`;
+    } else {
+      analysis = isHindi ?
+        `🌫️ बहुत अधिक नमी - AC में रहें\n` :
+        `🌫️ Very high humidity - stay in AC\n`;
+    }
+    
+    return analysis + '\n';
+  }
+
+  getEnhancedClothingAdvice(weatherData, isHindi) {
+    const temp = weatherData.temperature;
+    const isRainy = weatherData.description.toLowerCase().includes('rain');
+    let advice = '';
+    
+    if (temp <= 10) {
+      advice = isHindi ?
+        `🧥 Heavy jacket, thermal wear, gloves\n` +
+        `👒 Warm cap, muffler ज़रूरी\n` :
+        `🧥 Heavy jacket, thermal wear, gloves\n` +
+        `👒 Warm cap, muffler essential\n`;
+    } else if (temp <= 25) {
+      advice = isHindi ?
+        `👔 Light jacket, jeans, comfortable shirt\n` :
+        `👔 Light jacket, jeans, comfortable shirt\n`;
+    } else {
+      advice = isHindi ?
+        `🩳 Light cotton clothes, shorts, breathable fabric\n` +
+        `👒 Sun hat, sunglasses ज़रूरी\n` :
+        `🩳 Light cotton clothes, shorts, breathable fabric\n` +
+        `👒 Sun hat, sunglasses essential\n`;
+    }
+    
+    if (isRainy) {
+      advice += isHindi ?
+        `☔ Waterproof jacket और umbrella\n` :
+        `☔ Waterproof jacket and umbrella\n`;
+    }
+    
+    return advice + '\n';
+  }
+
+  getEnhancedActivitySuggestions(weatherData, isHindi) {
+    const temp = weatherData.temperature;
+    const isRainy = weatherData.description.toLowerCase().includes('rain');
+    const windSpeed = weatherData.windSpeed;
+    
+    if (isRainy) {
+      return isHindi ?
+        `🏠 Indoor activities: Movies, shopping, reading\n` +
+        `☕ Café visits, cooking, board games\n\n` :
+        `🏠 Indoor activities: Movies, shopping, reading\n` +
+        `☕ Café visits, cooking, board games\n\n`;
+    }
+    
+    if (temp >= 15 && temp <= 28 && windSpeed <= 20) {
+      return isHindi ?
+        `🚶 Walking, jogging, cycling perfect\n` +
+        `🏏 Cricket, football, outdoor sports\n` +
+        `🌳 Park picnic, gardening, photography\n\n` :
+        `🚶 Perfect for walking, jogging, cycling\n` +
+        `🏏 Cricket, football, outdoor sports\n` +
+        `🌳 Park picnic, gardening, photography\n\n`;
+    }
+    
+    if (temp > 35) {
+      return isHindi ?
+        `🏊 Swimming, water sports ideal\n` +
+        `❄️ AC malls, indoor activities\n` +
+        `🌅 Early morning या evening outdoor\n\n` :
+        `🏊 Swimming, water sports ideal\n` +
+        `❄️ AC malls, indoor activities\n` +
+        `🌅 Early morning or evening outdoor\n\n`;
+    }
+    
+    return isHindi ?
+      `😊 Light outdoor activities with proper precautions\n\n` :
+      `😊 Light outdoor activities with proper precautions\n\n`;
+  }
+
+  getHealthRecommendations(weatherData, isHindi) {
+    const temp = weatherData.temperature;
+    const humidity = weatherData.humidity;
+    const uvIndex = weatherData.uvIndex || 0;
+    let health = '';
+    
+    if (temp > 35) {
+      health += isHindi ?
+        `💧 हर 15 मिनट में पानी पिएं\n` +
+        `🧴 SPF 30+ sunscreen ज़रूरी\n` :
+        `💧 Drink water every 15 minutes\n` +
+        `🧴 SPF 30+ sunscreen essential\n`;
+    }
+    
+    if (uvIndex > 7) {
+      health += isHindi ?
+        `☀️ High UV Index - skin protection ज़रूरी\n` :
+        `☀️ High UV Index - skin protection essential\n`;
+    }
+    
+    if (humidity > 80) {
+      health += isHindi ?
+        `🌡️ High humidity - asthma patients सावधान\n` :
+        `🌡️ High humidity - asthma patients be careful\n`;
+    }
+    
+    return health + '\n';
+  }
+
+  getAgricultureAdvice(weatherData, isHindi) {
+    const temp = weatherData.temperature;
+    const isRainy = weatherData.description.toLowerCase().includes('rain');
+    let advice = '';
+    
+    if (weatherData.advancedData && weatherData.advancedData.soilCondition) {
+      advice += isHindi ?
+        `🌱 मिट्टी: ${weatherData.advancedData.soilCondition}\n` :
+        `🌱 Soil: ${weatherData.advancedData.soilCondition}\n`;
+    }
+    
+    if (isRainy) {
+      advice += isHindi ?
+        `🌧️ Natural irrigation का फायदा उठाएं\n` :
+        `🌧️ Take advantage of natural irrigation\n`;
+    }
+    
+    if (temp >= 20 && temp <= 30) {
+      advice += isHindi ?
+        `🌾 Planting के लिए ideal temperature\n` :
+        `🌾 Ideal temperature for planting\n`;
+    }
+    
+    return advice + '\n';
+  }
+
+  getAviationInfo(weatherData, isHindi) {
+    const windSpeed = weatherData.windSpeed;
+    const visibility = weatherData.visibility || 10;
+    let aviation = '';
+    
+    if (windSpeed > 25) {
+      aviation += isHindi ?
+        `⚠️ Strong winds - turbulence संभावना\n` :
+        `⚠️ Strong winds - turbulence likely\n`;
+    }
+    
+    if (visibility < 5) {
+      aviation += isHindi ?
+        `🌫️ Poor visibility - flight delays संभावित\n` :
+        `🌫️ Poor visibility - flight delays possible\n`;
+    }
+    
+    if (weatherData.advancedData && weatherData.advancedData.windShear) {
+      aviation += isHindi ?
+        `🌪️ Wind shear: ${weatherData.advancedData.windShear}\n` :
+        `🌪️ Wind shear: ${weatherData.advancedData.windShear}\n`;
+    }
+    
+    return aviation + '\n';
   }
 
   generateIntelligentResponse(query, weatherData, keywords) {
