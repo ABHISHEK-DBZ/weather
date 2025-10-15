@@ -223,6 +223,76 @@ class WeatherAgent {
     return suggestions;
   }
 
+  // Process advanced weather data from enhanced API
+  processAdvancedWeatherData(hourly, currentHour) {
+    if (!hourly || currentHour < 0) return {};
+    
+    const advancedData = {};
+    
+    // Soil data analysis
+    if (hourly.soil_moisture_27_to_81cm && hourly.soil_moisture_27_to_81cm[currentHour] !== undefined) {
+      const soilMoisture = hourly.soil_moisture_27_to_81cm[currentHour];
+      advancedData.soilMoisture = soilMoisture;
+      advancedData.soilCondition = this.analyzeSoilCondition(soilMoisture);
+    }
+    
+    if (hourly.soil_temperature_54cm && hourly.soil_temperature_54cm[currentHour] !== undefined) {
+      advancedData.soilTemperature = hourly.soil_temperature_54cm[currentHour];
+    }
+    
+    // High altitude wind analysis
+    if (hourly.wind_speed_180m && hourly.wind_speed_180m[currentHour] !== undefined) {
+      advancedData.highAltitudeWindSpeed = hourly.wind_speed_180m[currentHour];
+      advancedData.windShear = this.calculateWindShear(
+        hourly.wind_speed_180m[currentHour],
+        currentHour
+      );
+    }
+    
+    if (hourly.wind_direction_180m && hourly.wind_direction_180m[currentHour] !== undefined) {
+      advancedData.highAltitudeWindDirection = hourly.wind_direction_180m[currentHour];
+    }
+    
+    // High altitude temperature
+    if (hourly.temperature_180m && hourly.temperature_180m[currentHour] !== undefined) {
+      advancedData.highAltitudeTemperature = hourly.temperature_180m[currentHour];
+      advancedData.temperatureGradient = this.calculateTemperatureGradient(
+        hourly.temperature_180m[currentHour],
+        currentHour
+      );
+    }
+    
+    return advancedData;
+  }
+
+  // Analyze soil condition based on moisture
+  analyzeSoilCondition(moisture) {
+    if (moisture < 0.1) return 'Very Dry - Poor for planting';
+    if (moisture < 0.2) return 'Dry - Needs watering';
+    if (moisture < 0.3) return 'Moderate - Good for most plants';
+    if (moisture < 0.4) return 'Moist - Excellent for growth';
+    return 'Very Moist - Check drainage';
+  }
+
+  // Calculate wind shear (difference between ground and high altitude)
+  calculateWindShear(highAltWind, currentWind) {
+    if (!currentWind) return null;
+    const shear = Math.abs(highAltWind - currentWind);
+    if (shear > 15) return 'High wind shear - Turbulent conditions';
+    if (shear > 8) return 'Moderate wind shear';
+    return 'Low wind shear - Stable conditions';
+  }
+
+  // Calculate temperature gradient
+  calculateTemperatureGradient(highAltTemp, groundTemp) {
+    if (!groundTemp) return null;
+    const gradient = groundTemp - highAltTemp;
+    if (gradient > 15) return 'Strong inversion - Stable atmosphere';
+    if (gradient > 8) return 'Moderate inversion';
+    if (gradient < -5) return 'Unstable atmosphere - Possible storms';
+    return 'Normal gradient';
+  }
+
   async getCoordinates(city) {
     try {
       const axios = require('axios');
@@ -315,6 +385,7 @@ class WeatherAgent {
         params: {
           latitude: latitude,
           longitude: longitude,
+          models: 'best_match', // Use best available weather model
           current: [
             'temperature_2m',
             'relative_humidity_2m', 
@@ -326,14 +397,21 @@ class WeatherAgent {
             'cloud_cover',
             'visibility',
             'uv_index',
-            'is_day'
+            'is_day',
+            'precipitation'
           ].join(','),
           hourly: [
             'temperature_2m',
             'relative_humidity_2m',
             'precipitation_probability',
             'weather_code',
-            'apparent_temperature'
+            'apparent_temperature',
+            'soil_moisture_27_to_81cm',
+            'soil_temperature_54cm',
+            'wind_speed_180m',
+            'wind_direction_180m',
+            'temperature_180m',
+            'uv_index'
           ].join(','),
           daily: [
             'temperature_2m_max',
@@ -389,6 +467,9 @@ class WeatherAgent {
         console.warn(`Unusual temperature detected: ${currentTemp}°C for ${name}, ${country}`);
       }
       
+      // Advanced weather analysis with new parameters
+      const advancedData = this.processAdvancedWeatherData(hourly, currentHour);
+      
       // Enhanced recommendation with all available data
       const recommendation = this.generateEnhancedRecommendation({
         temperature: currentTemp,
@@ -424,8 +505,9 @@ class WeatherAgent {
           accuracy: '🎯 Google Weather Compatible Data',
           timezone: response.data.timezone || 'UTC',
           coordinates: `${latitude}, ${longitude}`,
-          dataSource: 'Open-Meteo API (High Resolution)',
+          dataSource: 'Open-Meteo API (High Resolution + Advanced Parameters)',
           googleCompatible: true,
+          advancedData: advancedData,
           lastUpdated: currentTimeString,
           debug: {
             weatherCode: weatherCode,
@@ -676,7 +758,8 @@ app.get('/api/weather/compare/:city', async (req, res) => {
         humidity: ourData.humidity,
         coordinates: ourData.coordinates,
         timezone: ourData.timezone,
-        accuracy: 'Enhanced for Google Weather compatibility'
+        accuracy: 'Enhanced for Google Weather compatibility',
+        advancedMetrics: ourData.advancedData || {}
       },
       features: {
         highResolution: true,
@@ -686,9 +769,14 @@ app.get('/api/weather/compare/:city', async (req, res) => {
         uvIndexIncluded: true,
         pressureData: true,
         visibilityData: true,
-        realFeelsLike: true
+        realFeelsLike: true,
+        bestMatchModels: true,
+        soilMoistureData: true,
+        highAltitudeWindData: true,
+        temperatureGradientAnalysis: true,
+        windShearDetection: true
       },
-      tip: 'हमारा weather data अब Google Weather के साथ match करने के लिए optimized है!'
+      tip: 'हमारा weather data अब Google Weather + Advanced Parameters के साथ match करने के लिए optimized है! 🌾🌪️📊'
     };
     
     res.json(comparison);
