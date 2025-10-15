@@ -1,0 +1,27 @@
+{
+  "name": "weather-agent",
+  "description": "AI Weather Agent - Get weather information and intelligent recommendations",
+  "image": "heroku/nodejs",
+  "stack": "heroku-22",
+  "keywords": ["node", "weather", "api", "ai", "forecast"],
+  "website": "https://github.com/yourusername/weather-agent",
+  "repository": "https://github.com/yourusername/weather-agent",
+  "env": {
+    "NODE_ENV": {
+      "description": "Node environment",
+      "value": "production"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "addons": [],
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ]
+}

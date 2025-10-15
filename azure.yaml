@@ -1,0 +1,9 @@
+# Azure Developer CLI Configuration
+name: weather-agent
+metadata:
+  template: weather-agent@0.0.1-beta
+services:
+  web:
+    project: .
+    language: js
+    host: containerapp
