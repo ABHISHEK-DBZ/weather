@@ -897,6 +897,7 @@ class WeatherAgent {
           city: name,
           country: country,
           temperature: Math.round(currentTemp * 10) / 10, // Google-like precision
+          feelsLike: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : Math.round(currentTemp * 10) / 10,
           apparentTemperature: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : null,
           description: weatherInfo.description,
           humidity: Math.round(currentHumidity),
@@ -1192,6 +1193,22 @@ app.get('/api/weather/compare/:city', async (req, res) => {
   }
 });
 
+// AI Weather Assistant Endpoint - Enhanced
+app.post('/api/weather-assistant', async (req, res) => {
+  const { query, city } = req.body;
+  
+  if (!query) {
+    return res.json({
+      success: false,
+      error: "Please ask me a weather-related question! 🌤️"
+    });
+  }
+
+  const response = await weatherAgent.processWeatherQuery(query, city);
+  res.json(response);
+});
+
+// Backward compatibility
 app.post('/api/chat', async (req, res) => {
   const { query, city } = req.body;
   
