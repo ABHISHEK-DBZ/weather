@@ -1,16 +1,79 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ─── Firebase/Firestore Initialization ────────────────────────────────────────
+const admin = require('firebase-admin');
+
+// For Render/External hosting, we need a service account key
+if (admin.apps.length === 0) {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      });
+      console.log('✅ Firebase initialized with Service Account');
+    } catch (err) {
+      console.error('❌ Failed to parse FIREBASE_SERVICE_ACCOUNT:', err.message);
+      admin.initializeApp(); // Fallback to default
+    }
+  } else {
+    // Local or automated environment credentials
+    admin.initializeApp();
+    console.log('✅ Firebase initialized with default credentials');
+  }
+}
+
+const db = admin.firestore();
+const LOG_COLLECTION = 'SearchLogs';
+
+// Helper for Firestore-based queries
+const firestoreAdd = async (data) => {
+  return await db.collection(LOG_COLLECTION).add({
+    ...data,
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+};
+
+const getAnalytics = async () => {
+  const snapshot = await db.collection(LOG_COLLECTION).get();
+  const totalSearches = snapshot.size;
+  
+  // Group by searchQuery manually (Firestore doesn't have native GROUP BY)
+  const cityCounts = {};
+  snapshot.forEach(doc => {
+    const query = doc.data().searchQuery;
+    cityCounts[query] = (cityCounts[query] || 0) + 1;
+  });
+
+  const topCities = Object.entries(cityCounts)
+    .map(([query, count]) => ({ searchQuery: query, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  return { totalSearches, topCities };
+};
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Serve static files with proper MIME types
-app.use(express.static('public', {
+// Health check for frontend
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    success: true, 
+    dbConnected: true,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Serve static files from the React app dist folder
+app.use(express.static(path.join(__dirname, 'client/dist'), {
   setHeaders: (res, path) => {
     if (path.endsWith('.css')) {
       res.setHeader('Content-Type', 'text/css');
@@ -19,6 +82,112 @@ app.use(express.static('public', {
     }
   }
 }));
+
+// Also keep 'public' as a fallback for any shared assets
+app.use(express.static('public'));
+
+// Trust proxy if you are deploying to Heroku/Vercel/etc. (Important for getting real IPs)
+app.set('trust proxy', true);
+
+// POST: Log a successful weather search
+app.post('/api/log-search', async (req, res) => {
+  try {
+    const { searchQuery, latitude, longitude, weatherResult, temperature, userId } = req.body;
+    const userIp = req.ip || '127.0.0.1';
+    
+    await firestoreAdd({
+      userId: userId || null,
+      userIp,
+      searchQuery,
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      weatherResult,
+      temperature: parseFloat(temperature)
+    });
+    
+    res.status(201).json({ success: true, message: 'Log saved' });
+  } catch (error) {
+    console.error('Failed to log search:', error.message);
+    res.status(500).json({ success: false, error: 'DB write failed' });
+  }
+});
+
+// GET: Analytics
+app.get('/api/analytics', async (req, res) => {
+  try {
+    const { totalSearches, topCities } = await getAnalytics();
+    
+    // Map to match frontend expectations
+    const mappedCities = topCities.map(c => ({
+      searchQuery: c.searchQuery,
+      _count: { searchQuery: c.count }
+    }));
+
+    res.json({ 
+      success: true, 
+      totalSearches, 
+      topCities: mappedCities 
+    });
+  } catch (error) {
+    console.error('Analytics error:', error.message);
+    res.json({ success: true, totalSearches: 0, topCities: [] });
+  }
+});
+
+// GET: Export CSV
+app.get('/api/export-data', async (req, res) => {
+  try {
+    const { parse } = require('json2csv');
+    const snapshot = await db.collection(LOG_COLLECTION).orderBy('createdAt', 'desc').get();
+    
+    if (snapshot.empty) {
+      return res.status(404).json({ error: 'No data to export yet' });
+    }
+    
+    const logs = [];
+    snapshot.forEach(doc => logs.push({ id: doc.id, ...doc.data() }));
+    
+    const fields = ['id', 'userIp', 'searchQuery', 'latitude', 'longitude', 'weatherResult', 'temperature', 'createdAt'];
+    const csv = parse(logs, { fields });
+    res.header('Content-Type', 'text/csv');
+    res.attachment('weather_search_logs.csv');
+    return res.send(csv);
+  } catch (error) {
+    console.error('Export error:', error.message);
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+// POST: AI Chat Assistant
+app.post('/api/ai-chat', async (req, res) => {
+  try {
+    const { query, city } = req.body;
+    if (!query) {
+      return res.status(400).json({ success: false, error: "Query is required" });
+    }
+
+    const agent = new WeatherAgent();
+    const result = await agent.processWeatherQuery(query, city);
+    
+    // Log AI queries too for analytics if city was resolved
+    if (result.success && result.data && result.data.city) {
+      const userIp = req.ip || '127.0.0.1';
+      firestoreAdd({
+        searchQuery: `AI: ${query}`, 
+        userIp, 
+        weatherResult: 'AI Analysis',
+        temperature: parseFloat(result.data.temperature) || 0,
+        latitude: parseFloat(result.data.latitude) || 0,
+        longitude: parseFloat(result.data.longitude) || 0
+      }).catch(e => console.error("Logging AI search failed:", e));
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error("AI Chat Error:", error);
+    res.status(500).json({ success: false, error: "AI Assistant is resting. Try again later!" });
+  }
+});
 
 // Weather service
 class WeatherAgent {
@@ -62,8 +231,22 @@ class WeatherAgent {
       };
     }
 
-    // If weather query but no city provided, ask for city
-    if (isWeatherQuery && (!city || city.trim() === '')) {
+    // If weather query but no city provided, try to find one in the query
+    let resolvedCity = city;
+    if (!resolvedCity || resolvedCity.trim() === '') {
+      // Very simple extraction: look for capitalized words or words after 'in' / 'at' / 'me'
+      const inMatch = query.match(/\b(in|at|for|around|of)\s+([A-Z][a-z]+|[a-z]+)\b/i);
+      if (inMatch) {
+         resolvedCity = inMatch[2];
+      } else {
+        // Just take the last word if it's longer than 3 chars and not a keyword
+        const words = query.split(' ').filter(w => w.length > 3);
+        const lastWord = words[words.length - 1];
+        if (lastWord && !isWeatherQuery) resolvedCity = lastWord;
+      }
+    }
+
+    if (!resolvedCity || resolvedCity.trim() === '') {
       return {
         success: false,
         error: isHindi ? 
@@ -74,7 +257,7 @@ class WeatherAgent {
     }
 
     // Get weather data
-    const weatherData = await this.getCurrentWeather(city);
+    const weatherData = await this.getCurrentWeather(resolvedCity);
     if (!weatherData.success) {
       return weatherData;
     }
@@ -1042,7 +1225,7 @@ class WeatherAgent {
     
     // Temperature-based recommendations with higher precision
     if (temperature < -10) {
-      recommendations.push('� Extremely cold! Frostbite risk - cover all exposed skin, wear insulated boots');
+      recommendations.push(' Extremely cold! Frostbite risk - cover all exposed skin, wear insulated boots');
     } else if (temperature < 0) {
       recommendations.push('🧥 Freezing weather! Heavy winter gear essential, watch for ice');
     } else if (temperature < 5) {
@@ -1212,34 +1395,14 @@ app.get('/api/weather/compare/:city', async (req, res) => {
   }
 });
 
-// AI Weather Assistant Endpoint - Enhanced
-app.post('/api/weather-assistant', async (req, res) => {
-  const { query, city } = req.body;
-  
-  if (!query) {
-    return res.json({
-      success: false,
-      error: "Please ask me a weather-related question! 🌤️"
-    });
-  }
+// ─── DEPRECATED ENDPOINTS (Redirect to unified /api/ai-chat) ────────────────
 
-  const response = await weatherAgent.processWeatherQuery(query, city);
-  res.json(response);
+app.post('/api/weather-assistant', async (req, res) => {
+  res.redirect(307, '/api/ai-chat');
 });
 
-// Backward compatibility
 app.post('/api/chat', async (req, res) => {
-  const { query, city } = req.body;
-  
-  if (!query) {
-    return res.json({
-      success: false,
-      error: "Please ask me a weather-related question! 🌤️"
-    });
-  }
-
-  const response = await weatherAgent.processWeatherQuery(query, city);
-  res.json(response);
+  res.redirect(307, '/api/ai-chat');
 });
 
 app.get('/api/weather/:city', async (req, res) => {
@@ -1261,7 +1424,12 @@ app.get('/api/forecast/:city', async (req, res) => {
   res.json(forecast);
 });
 
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+});
+
+// Standard Node server listener
 app.listen(PORT, () => {
-  console.log(`Weather Agent server running on port ${PORT}`);
-  console.log(`Visit http://localhost:${PORT} to use the weather agent`);
+  console.log(`🚀 3D Weather Platform server running on port ${PORT}`);
+  console.log(`Visit http://localhost:${PORT} to use the app`);
 });
