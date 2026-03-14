@@ -5,28 +5,16 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isDirectRun = require.main === module;
+const IS_API_ONLY = process.env.API_ONLY === 'true';
 
-// ─── Firebase/Firestore Initialization ────────────────────────────────────────
+// ─── Firebase Initialization ──────────────────────────────────────────────────
 const admin = require('firebase-admin');
+const functions = require('firebase-functions');
 
-// For Render/External hosting, we need a service account key
+// Initialize Firebase Admin
 if (admin.apps.length === 0) {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    try {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-      });
-      console.log('✅ Firebase initialized with Service Account');
-    } catch (err) {
-      console.error('❌ Failed to parse FIREBASE_SERVICE_ACCOUNT:', err.message);
-      admin.initializeApp(); // Fallback to default
-    }
-  } else {
-    // Local or automated environment credentials
-    admin.initializeApp();
-    console.log('✅ Firebase initialized with default credentials');
-  }
+  admin.initializeApp();
 }
 
 const db = admin.firestore();
@@ -59,12 +47,47 @@ const getAnalytics = async () => {
   return { totalSearches, topCities };
 };
 
+const extractCityFromQuery = (query = '') => {
+  if (!query || typeof query !== 'string') return null;
+  const normalized = query.trim();
+  if (!normalized) return null;
+
+  const inMatch = normalized.match(/\b(?:in|at|for|around|of)\s+([A-Za-z][A-Za-z\s-]{1,40})/i);
+  if (inMatch && inMatch[1]) {
+    return inMatch[1].trim().split(/\s+/).slice(0, 3).join(' ');
+  }
+
+  return null;
+};
+
+const buildFallbackAiText = (w) => {
+  return [
+    `Smart Weather Analysis for ${w.city}, ${w.country}`,
+    '',
+    `Temperature: ${w.temperature}°C (Feels like: ${w.feelsLike}°C)`,
+    `Condition: ${w.description}`,
+    `Humidity: ${w.humidity}%`,
+    `Wind: ${w.windSpeed} m/s`,
+    '',
+    w.recommendation || 'No extra recommendation available right now.'
+  ].join('\n');
+};
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Health check for frontend
-app.get('/api/health', (req, res) => {
+// Request logging for debugging Firebase paths
+app.use((req, res, next) => {
+  console.log(`[DEBUG] Method: ${req.method} | Path: ${req.path} | Original: ${req.originalUrl}`);
+  next();
+});
+
+// Create an API Router to handle both /api and root paths (Firebase stripping)
+const apiRouter = express.Router();
+
+// Health check
+apiRouter.get('/health', (req, res) => {
   res.json({ 
     success: true, 
     dbConnected: true,
@@ -72,25 +95,8 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Serve static files from the React app dist folder
-app.use(express.static(path.join(__dirname, 'client/dist'), {
-  setHeaders: (res, path) => {
-    if (path.endsWith('.css')) {
-      res.setHeader('Content-Type', 'text/css');
-    } else if (path.endsWith('.js')) {
-      res.setHeader('Content-Type', 'application/javascript');
-    }
-  }
-}));
-
-// Also keep 'public' as a fallback for any shared assets
-app.use(express.static('public'));
-
-// Trust proxy if you are deploying to Heroku/Vercel/etc. (Important for getting real IPs)
-app.set('trust proxy', true);
-
 // POST: Log a successful weather search
-app.post('/api/log-search', async (req, res) => {
+apiRouter.post('/log-search', async (req, res) => {
   try {
     const { searchQuery, latitude, longitude, weatherResult, temperature, userId } = req.body;
     const userIp = req.ip || '127.0.0.1';
@@ -113,11 +119,10 @@ app.post('/api/log-search', async (req, res) => {
 });
 
 // GET: Analytics
-app.get('/api/analytics', async (req, res) => {
+apiRouter.get('/analytics', async (req, res) => {
   try {
     const { totalSearches, topCities } = await getAnalytics();
     
-    // Map to match frontend expectations
     const mappedCities = topCities.map(c => ({
       searchQuery: c.searchQuery,
       _count: { searchQuery: c.count }
@@ -135,7 +140,7 @@ app.get('/api/analytics', async (req, res) => {
 });
 
 // GET: Export CSV
-app.get('/api/export-data', async (req, res) => {
+apiRouter.get('/export-data', async (req, res) => {
   try {
     const { parse } = require('json2csv');
     const snapshot = await db.collection(LOG_COLLECTION).orderBy('createdAt', 'desc').get();
@@ -159,22 +164,45 @@ app.get('/api/export-data', async (req, res) => {
 });
 
 // POST: AI Chat Assistant
-app.post('/api/ai-chat', async (req, res) => {
+apiRouter.post('/ai-chat', async (req, res) => {
   try {
     const { query, city } = req.body;
-    if (!query) {
-      return res.status(400).json({ success: false, error: "Query is required" });
-    }
-
     const agent = new WeatherAgent();
     const result = await agent.processWeatherQuery(query, city);
+
+    if (!result.success) {
+      const fallbackCity = city || extractCityFromQuery(query);
+      if (fallbackCity) {
+        let fallbackWeather = await agent.getCurrentWeather(fallbackCity);
+        if (!fallbackWeather.success) {
+          fallbackWeather = await agent.getCurrentWeatherLite(fallbackCity);
+        }
+
+        if (fallbackWeather.success) {
+          const weather = fallbackWeather.data;
+          firestoreAdd({
+            searchQuery: `AI(Fallback): ${query}`,
+            userIp: req.ip || '127.0.0.1',
+            weatherResult: weather.description,
+            temperature: parseFloat(weather.temperature) || 0,
+            latitude: parseFloat((weather.coordinates || '').split(',')[0]) || 0,
+            longitude: parseFloat((weather.coordinates || '').split(',')[1]) || 0
+          }).catch((e) => console.error('Logging AI fallback failed:', e));
+
+          return res.json({
+            success: true,
+            response: buildFallbackAiText(weather),
+            fallback: true,
+            data: weather
+          });
+        }
+      }
+    }
     
-    // Log AI queries too for analytics if city was resolved
     if (result.success && result.data && result.data.city) {
-      const userIp = req.ip || '127.0.0.1';
       firestoreAdd({
         searchQuery: `AI: ${query}`, 
-        userIp, 
+        userIp: req.ip || '127.0.0.1', 
         weatherResult: 'AI Analysis',
         temperature: parseFloat(result.data.temperature) || 0,
         latitude: parseFloat(result.data.latitude) || 0,
@@ -188,6 +216,44 @@ app.post('/api/ai-chat', async (req, res) => {
     res.status(500).json({ success: false, error: "AI Assistant is resting. Try again later!" });
   }
 });
+
+// Legacy redirects
+apiRouter.post(['/weather-assistant', '/chat'], (req, res) => {
+  res.redirect(307, '/api/ai-chat');
+});
+
+// Weather API Endpoints
+apiRouter.get('/weather/:city', async (req, res) => {
+  const result = await weatherAgent.getCurrentWeather(req.params.city);
+  if (result.success) {
+    result.data.recommendation = weatherAgent.getWeatherRecommendation(
+      result.data.temperature,
+      result.data.description
+    );
+  }
+  res.json(result);
+});
+
+apiRouter.get('/forecast/:city', async (req, res) => {
+  const forecast = await weatherAgent.getForecast(req.params.city);
+  res.json(forecast);
+});
+
+apiRouter.get('/weather/compare/:city', async (req, res) => {
+  const ourData = await weatherAgent.getCurrentWeather(req.params.city);
+  res.json({ success: true, city: req.params.city, data: ourData.data });
+});
+
+// Mount the router on both /api and / to handle different environments
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
+
+// Serve static files only when this process is responsible for frontend hosting.
+if (!IS_API_ONLY) {
+  app.use(express.static(path.join(__dirname, 'client/dist')));
+  app.use(express.static('public'));
+}
+app.set('trust proxy', true);
 
 // Weather service
 class WeatherAgent {
@@ -1137,6 +1203,63 @@ class WeatherAgent {
     }
   }
 
+  async getCurrentWeatherLite(city) {
+    try {
+      const axios = require('axios');
+      const coordsResult = await this.getCoordinates(city);
+
+      if (!coordsResult.success) {
+        return coordsResult;
+      }
+
+      const { latitude, longitude, name, country } = coordsResult.data;
+      const response = await axios.get(this.weatherApiUrl, {
+        params: {
+          latitude,
+          longitude,
+          current: [
+            'temperature_2m',
+            'relative_humidity_2m',
+            'apparent_temperature',
+            'weather_code',
+            'wind_speed_10m',
+            'is_day'
+          ].join(','),
+          timezone: 'auto'
+        }
+      });
+
+      const current = response.data.current;
+      const weatherInfo = this.getWeatherDescription(current.weather_code, current.is_day === 1);
+
+      return {
+        success: true,
+        data: {
+          city: name,
+          country,
+          temperature: Math.round(current.temperature_2m * 10) / 10,
+          feelsLike: Math.round(current.apparent_temperature * 10) / 10,
+          apparentTemperature: Math.round(current.apparent_temperature * 10) / 10,
+          description: weatherInfo.description,
+          humidity: Math.round(current.relative_humidity_2m),
+          windSpeed: Math.round(current.wind_speed_10m * 10) / 10,
+          isDay: current.is_day === 1,
+          icon: weatherInfo.icon,
+          recommendation: this.getWeatherRecommendation(current.temperature_2m, weatherInfo.description),
+          coordinates: `${latitude}, ${longitude}`,
+          timezone: response.data.timezone || 'UTC',
+          lastUpdated: current.time
+        }
+      };
+    } catch (error) {
+      console.error('Weather Lite API Error:', error.message);
+      return {
+        success: false,
+        error: 'Unable to fetch fallback weather data.'
+      };
+    }
+  }
+
   async getForecast(city) {
     try {
       const axios = require('axios');
@@ -1152,7 +1275,7 @@ class WeatherAgent {
         params: {
           latitude,
           longitude,
-          daily: 'temperature_2m_max,weather_code',
+          daily: 'temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max',
           timezone: 'auto',
           forecast_days: 5
         }
@@ -1162,10 +1285,13 @@ class WeatherAgent {
       const forecast = daily.time.map((date, index) => {
         const weatherInfo = this.getWeatherDescription(daily.weather_code[index]);
         return {
-          date: new Date(date).toLocaleDateString(),
-          temperature: Math.round(daily.temperature_2m_max[index]),
+          date: date, // Keep YYYY-MM-DD for easier frontend parsing
+          tempMax: Math.round(daily.temperature_2m_max[index]),
+          tempMin: Math.round(daily.temperature_2m_min[index]),
+          precipProb: daily.precipitation_probability_max[index],
           description: weatherInfo.description,
-          icon: weatherInfo.icon
+          icon: weatherInfo.icon,
+          code: daily.weather_code[index]
         };
       });
 
@@ -1177,6 +1303,7 @@ class WeatherAgent {
         }
       };
     } catch (error) {
+      console.error('Forecast logic error:', error);
       return {
         success: false,
         error: 'Forecast service error'
@@ -1351,7 +1478,7 @@ app.get('/', (req, res) => {
 });
 
 // AI Weather Assistant Endpoint
-app.get('/api/weather/compare/:city', async (req, res) => {
+app.get(['/api/weather/compare/:city', '/weather/compare/:city'], async (req, res) => {
   try {
     const city = req.params.city;
     
@@ -1395,41 +1522,20 @@ app.get('/api/weather/compare/:city', async (req, res) => {
   }
 });
 
-// ─── DEPRECATED ENDPOINTS (Redirect to unified /api/ai-chat) ────────────────
+// Final route: serve index.html for all other routes in full-stack mode.
+if (!IS_API_ONLY) {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+  });
+}
 
-app.post('/api/weather-assistant', async (req, res) => {
-  res.redirect(307, '/api/ai-chat');
-});
+// Export as Firebase Function
+exports.api = functions.https.onRequest(app);
 
-app.post('/api/chat', async (req, res) => {
-  res.redirect(307, '/api/ai-chat');
-});
-
-app.get('/api/weather/:city', async (req, res) => {
-  const { city } = req.params;
-  const weather = await weatherAgent.getCurrentWeather(city);
-  
-  if (weather.success) {
-    weather.data.recommendation = weatherAgent.getWeatherRecommendation(
-      weather.data.temperature,
-      weather.data.description
-    );
-  }
-  
-  res.json(weather);
-});
-
-app.get('/api/forecast/:city', async (req, res) => {
-  const forecast = await weatherAgent.getForecast(req.params.city);
-  res.json(forecast);
-});
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
-});
-
-// Standard Node server listener
-app.listen(PORT, () => {
-  console.log(`🚀 3D Weather Platform server running on port ${PORT}`);
-  console.log(`Visit http://localhost:${PORT} to use the app`);
-});
+// Local development listener
+if (process.env.NODE_ENV !== 'production' && !process.env.FUNCTIONS_EMULATOR) {
+  app.listen(PORT, () => {
+    console.log(`🚀 3D Weather Platform server running on port ${PORT}`);
+    console.log(`Visit http://localhost:${PORT} to use the app`);
+  });
+}
