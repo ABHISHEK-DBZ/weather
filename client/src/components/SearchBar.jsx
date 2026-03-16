@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import { apiUrl } from '../utils/api';
 
 // ─── Weather helpers ─────────────────────────────────────────────────────────
 const getWeatherIcon = (code, isDay) => {
@@ -50,7 +51,7 @@ async function geocodeCity(city) {
 async function fetchWeather(lat, lon) {
   const res = await fetch(
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day,precipitation&timezone=auto`
+    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day,precipitation,soil_temperature_0cm,soil_moisture_0_1cm&timezone=auto`
   );
   const data = await res.json();
   const c = data.current;
@@ -62,6 +63,8 @@ async function fetchWeather(lat, lon) {
     code:      c.weather_code,
     isDay:     c.is_day === 1,
     precip:    c.precipitation,
+    soilTemp:  c.soil_temperature_0cm,
+    soilMoisture: c.soil_moisture_0_1cm,
   };
 }
 
@@ -170,13 +173,13 @@ const S = {
   }),
   cardInner: (accent) => ({
     position: 'relative',
-    borderRadius: 24,
+    borderRadius: 28,
     overflow: 'hidden',
-    background: `linear-gradient(135deg, rgba(0,0,0,0.75), rgba(0,0,0,0.85))`,
-    backdropFilter: 'blur(28px)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    boxShadow: `0 24px 80px rgba(0,0,0,0.6), 0 0 40px ${accent}22`,
-    padding: 24,
+    background: `linear-gradient(165deg, rgba(15, 23, 42, 0.8), rgba(2, 6, 23, 0.95))`,
+    backdropFilter: 'blur(32px)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    boxShadow: `0 30px 100px rgba(0,0,0,0.7), 0 0 50px ${accent}15`,
+    padding: '28px',
   }),
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
   cityName: { fontWeight: 900, fontSize: 24, color: 'white', fontFamily: 'Inter, sans-serif' },
@@ -245,6 +248,14 @@ const S = {
     whiteSpace: 'pre-wrap',
     opacity: 0.95,
   },
+  navWrap: {
+    pointerEvents: 'auto',
+    position: 'fixed',
+    top: 24, right: 24,
+    display: 'flex',
+    gap: 10,
+    zIndex: 1000,
+  },
   alertBanner: {
     pointerEvents: 'auto',
     position: 'fixed',
@@ -266,30 +277,53 @@ const S = {
   alertText: { flex: 1, color: 'white', fontFamily: 'Inter, sans-serif' },
   alertTitle: { fontWeight: 800, fontSize: 16, marginBottom: 2 },
   alertDesc: { fontSize: 14, opacity: 0.8 },
-  navWrap: {
-    pointerEvents: 'auto',
-    position: 'fixed',
-    top: 20, right: 20,
-    display: 'flex',
-    gap: 8,
-    zIndex: 100,
-  },
   navBtn: {
-    padding: '8px 18px',
-    borderRadius: 40,
-    background: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(255,255,255,0.14)',
+    padding: '10px 20px',
+    borderRadius: '12px',
+    background: 'rgba(0,0,0,0.6)',
+    border: '1px solid rgba(255,255,255,0.15)',
     color: 'white',
     fontFamily: 'Inter, sans-serif',
-    fontSize: 13,
-    fontWeight: 600,
+    fontSize: '14px',
+    fontWeight: 700,
     cursor: 'pointer',
     backdropFilter: 'blur(12px)',
     textDecoration: 'none',
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 4,
+    gap: 8,
+    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
   },
+  forecastWrap: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTop: '1px solid rgba(255,255,255,0.08)',
+  },
+  forecastTitle: {
+    fontSize: 12,
+    fontWeight: 800,
+    color: 'rgba(255,255,255,0.35)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.1em',
+    marginBottom: 12,
+    textAlign: 'center'
+  },
+  forecastGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(5, 1fr)',
+    gap: 8
+  },
+  forecastItem: {
+    background: 'rgba(255,255,255,0.03)',
+    borderRadius: 14,
+    padding: '10px 4px',
+    textAlign: 'center',
+    border: '1px solid rgba(255,255,255,0.05)',
+  },
+  forecastDay: { fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.5)', marginBottom: 4 },
+  forecastIcon: { fontSize: 20, margin: '4px 0' },
+  forecastTemp: { fontSize: 13, fontWeight: 800, color: 'white' },
+  forecastDesc: { fontSize: 9, color: 'rgba(255,255,255,0.3)', marginTop: 2, height: 24, overflow: 'hidden' },
 };
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -298,6 +332,7 @@ export default function SearchBar({ onSearchComplete }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [result,  setResult]  = useState(null);
+  const [forecast, setForecast] = useState([]);
   const [aiResponse, setAiResponse] = useState(null);
   const [alert, setAlert] = useState(null);
   const [mode, setMode] = useState('weather'); // 'weather' or 'ai'
@@ -337,7 +372,7 @@ export default function SearchBar({ onSearchComplete }) {
     try {
       if (mode === 'ai' || q.split(' ').length > 3) {
         const lastCity = result?.name || '';
-        const aiRes = await fetch('/api/ai-chat', {
+        const aiRes = await fetch(apiUrl('/api/ai-chat'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: q, city: lastCity }),
@@ -358,17 +393,35 @@ export default function SearchBar({ onSearchComplete }) {
           humidity: weather.humidity, wind: weather.wind,
           code: weather.code, isDay: weather.isDay,
           precip: weather.precip,
+          soilTemp: weather.soilTemp,
+          soilMoisture: weather.soilMoisture,
           condition: getWeatherLabel(weather.code),
         };
         setResult(combined);
         onSearchComplete(combined);
 
-        fetch('/api/log-search', {
+        // Fetch 5-day forecast from our backend
+        try {
+          const forecastRes = await fetch(apiUrl(`/api/forecast/${geo.name}`));
+          const forecastData = await forecastRes.json();
+          if (forecastData.success) {
+            setForecast(forecastData.data.forecast);
+          }
+        } catch (fErr) {
+          console.warn("Forecast fetch failed:", fErr);
+        }
+
+        fetch(apiUrl('/api/log-search'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            searchQuery: q, latitude: geo.lat, longitude: geo.lon,
-            weatherResult: combined.condition, temperature: combined.temp,
+            searchQuery: q, 
+            latitude: geo.lat, 
+            longitude: geo.lon,
+            weatherResult: combined.condition, 
+            temperature: combined.temp,
+            soilTemperature: weather.soilTemp,
+            soilMoisture: weather.soilMoisture
           }),
         }).catch(() => {});
       }
@@ -461,7 +514,11 @@ export default function SearchBar({ onSearchComplete }) {
                   </div>
                 </div>
                 <div style={S.statsGrid}>
-                  {[{ icon: '💧', val: `${result.humidity}%`, lbl: 'Humidity' }, { icon: '💨', val: `${result.wind} km/h`, lbl: 'Wind' }, { icon: '🌧️', val: `${result.precip} mm`, lbl: 'Precip.' }].map(s => (
+                  {[
+                    { icon: '💨', val: `${result.wind} km/h`, lbl: 'Wind' },
+                    { icon: '🌡️', val: `${result.soilTemp}°C`, lbl: 'Soil Temp' },
+                    { icon: '💧', val: `${result.soilMoisture} m³/m³`, lbl: 'Soil Moist.' }
+                  ].map(s => (
                     <div key={s.lbl} style={S.statBox}>
                       <div style={S.statIcon}>{s.icon}</div>
                       <div style={S.statVal}>{s.val}</div>
@@ -470,6 +527,24 @@ export default function SearchBar({ onSearchComplete }) {
                   ))}
                 </div>
                 <div style={S.coords}>{result.lat.toFixed(2)}°N, {result.lon.toFixed(2)}°E · Open-Meteo</div>
+
+                {forecast && forecast.length > 0 && (
+                  <div style={S.forecastWrap}>
+                    <div style={S.forecastTitle}>5-Day Outlook</div>
+                    <div style={S.forecastGrid}>
+                      {forecast.map((f, idx) => (
+                        <div key={idx} style={S.forecastItem}>
+                          <div style={S.forecastDay}>
+                            {f.date.split('-').slice(1).reverse().join('/')}
+                          </div>
+                          <div style={S.forecastIcon}>{getWeatherIcon(f.code, true)}</div>
+                          <div style={S.forecastTemp}>{f.tempMax}°</div>
+                          <div style={S.forecastDesc}>{f.description}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

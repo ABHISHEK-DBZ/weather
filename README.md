@@ -34,6 +34,49 @@ For development with auto-reload:
 npm run dev
 ```
 
+## Full Deployment Options
+
+### Option A: Full System on Firebase (Frontend + Backend)
+
+1. Install CLI and login:
+```bash
+npm install -g firebase-tools
+firebase login
+```
+
+2. Confirm project in `.firebaserc`:
+- Current default project: `weather-globe-3d-premium`
+
+3. Deploy full stack:
+```bash
+npm run deploy:firebase
+```
+
+This deploys:
+- Firebase Hosting for frontend (`client/dist`)
+- Cloud Function `api` for backend routes
+
+### Option B: Frontend on Firebase, Backend on Render
+
+1. Deploy backend to Render using `render.yaml`.
+
+2. In `client/.env` set:
+```bash
+VITE_API_BASE_URL=https://your-render-service.onrender.com
+```
+
+3. Build and deploy frontend hosting only:
+```bash
+npm run build
+npm run deploy:firebase:frontend
+```
+
+### Option C: Backend only on Render
+
+Render is configured for API-only mode:
+- Start command: `npm run start:api`
+- Health check: `/api/health`
+
 ## API Endpoints
 
 - `GET /api/weather/:city` - Get current weather for a city

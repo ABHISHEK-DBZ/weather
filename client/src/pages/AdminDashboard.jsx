@@ -6,6 +6,7 @@ import {
 } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
 import { Link } from 'react-router-dom';
+import { apiUrl } from '../utils/api';
 import { Activity, Globe, Download, RefreshCw, BarChart3, PieChart, Users, Zap } from 'lucide-react';
 
 ChartJS.register(
@@ -270,6 +271,18 @@ const Card = ({ icon: Icon, label, value, color, delay }) => (
   </motion.div>
 );
 
+const formatUptime = (seconds) => {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+};
+
+// ... (existing styles)
+
+// ...
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
@@ -281,7 +294,7 @@ export default function AdminDashboard() {
   const fetchData = async () => {
     setRefreshing(true);
     try {
-      const r = await fetch('/api/analytics');
+      const r = await fetch(apiUrl('/api/analytics'));
       const d = await r.json();
       if (d.success) {
         setStats(d);
@@ -315,13 +328,13 @@ export default function AdminDashboard() {
       labels: stats.topCities.map(c => c.searchQuery.replace('AI: ', '🤖 ')),
       datasets: [{
         label: 'Searches',
-        data: stats.topCities.map(c => c._count.searchQuery),
+        data: stats.topCities.map(c => Number(c.count) || 0),
         backgroundColor: (ctx) => {
           const chart = ctx.chart;
           const { ctx: canvasCtx, chartArea } = chart;
-          if (!chartArea) return null;
+          if (!chartArea) return THEME.accent;
           const gradient = canvasCtx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-          gradient.addColorStop(0, `${THEME.accent}05`);
+          gradient.addColorStop(0, `${THEME.accent}44`);
           gradient.addColorStop(1, THEME.accent);
           return gradient;
         },
@@ -337,7 +350,7 @@ export default function AdminDashboard() {
     return {
       labels: stats.topCities.map(c => c.searchQuery.replace('AI: ', '')),
       datasets: [{
-        data: stats.topCities.map(c => c._count.searchQuery),
+        data: stats.topCities.map(c => Number(c.count) || 0),
         backgroundColor: [THEME.accent, THEME.secondary, THEME.success, '#facc15', '#f87171'],
         borderWidth: 0,
         hoverOffset: 15,
@@ -363,8 +376,13 @@ export default function AdminDashboard() {
     },
     scales: {
       y: { 
+        beginAtZero: true,
         grid: { color: 'rgba(255,255,255,0.03)', drawBorder: false },
-        ticks: { color: THEME.textSecondary, font: { family: THEME.fontBody, size: 11 } }
+        ticks: { 
+          color: THEME.textSecondary, 
+          font: { family: THEME.fontBody, size: 11 },
+          stepSize: 1
+        }
       },
       x: { 
         grid: { display: false },
@@ -409,12 +427,21 @@ export default function AdminDashboard() {
           </motion.button>
           <motion.button 
             whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-            onClick={() => window.location.href = '/api/export-data'}
+            onClick={() => { window.location.href = apiUrl('/api/export-data?type=logs'); }}
             style={styles.actionBtn('primary')}
             disabled={!stats || stats.totalSearches === 0}
           >
             <Download size={18} />
-            Export CSV
+            Search Logs
+          </motion.button>
+          <motion.button 
+            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+            onClick={() => { window.location.href = apiUrl('/api/export-data?type=farmers'); }}
+            style={styles.actionBtn('secondary')}
+            disabled={!stats || stats.totalFarmers === 0}
+          >
+            <Users size={18} />
+            Farmer List
           </motion.button>
           <Link to="/" style={{ textDecoration: 'none' }}>
             <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} style={styles.actionBtn('secondary')}>
@@ -427,9 +454,12 @@ export default function AdminDashboard() {
 
       <main style={styles.grid} className="grid-col-12">
         <Card icon={Zap} label="Pulse Inquiries" value={stats?.totalSearches || 0} color={THEME.accent} delay={0.1} />
-        <Card icon={Globe} label="Geo Nodes" value={stats?.topCities?.length || 0} color={THEME.secondary} delay={0.2} />
-        <Card icon={Users} label="Daily Intensity" value={stats?._avgIntensity || 12} color={THEME.success} delay={0.3} />
-        <Card icon={Activity} label="Uptime" value="100%" color="#facc15" delay={0.4} />
+        <Card icon={Users} label="Registered Farmers" value={stats?.totalFarmers || 0} color={THEME.success} delay={0.2} />
+        <Card icon={Globe} label="Geo Nodes" value={stats?.geoNodes || 0} color={THEME.secondary} delay={0.3} />
+        <Card icon={Activity} label="Daily Intensity" value={stats?.dailyIntensity || 0} color="#fbbf24" delay={0.4} />
+        <Card icon={RefreshCw} label="System Uptime" value={formatUptime(stats?.uptime || 0)} color="#a78bfa" delay={0.5} />
+        <Card icon={BarChart3} label="Avg Soil Temp" value={(stats?.avgSoilTemp || 0) + '°C'} color="#f87171" delay={0.6} />
+        <Card icon={Activity} label="Avg Soil Moisture" value={(stats?.avgSoilMoisture || 0) + ' m³/m³'} color="#60a5fa" delay={0.7} />
 
         <motion.section 
           initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}

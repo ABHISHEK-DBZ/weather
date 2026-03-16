@@ -6,6 +6,7 @@ import gsap from 'gsap';
 
 import Earth from './Earth';
 import SearchBar from './SearchBar';
+import AgriStats from './AgriStats';
 import { latLongToCartesian } from '../utils/coordinates';
 
 const GLOBE_RADIUS = 2;
@@ -140,6 +141,7 @@ export default function AppScene() {
     }}>
       {/* UI Overlay */}
       <SearchBar onSearchComplete={handleSearchData} />
+      <AgriStats />
 
       {/* 3D Canvas */}
       <Canvas

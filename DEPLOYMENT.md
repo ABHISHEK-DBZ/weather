@@ -109,6 +109,37 @@ This guide provides multiple deployment options for your AI Weather Agent.
    - Build Command: `npm install`
    - Start Command: `npm start`
 
+### Option 7: Firebase Hosting + Cloud Functions
+
+This repository is now pre-configured for Firebase deployment using:
+- `firebase.json`
+- `.firebaserc`
+- Exported function `api` from `server.js`
+
+1. **Install Firebase CLI**
+   ```bash
+   npm install -g firebase-tools
+   ```
+
+2. **Login and Select Project**
+   ```bash
+   firebase login
+   firebase use --add
+   ```
+
+3. **Set your project id**
+   - Update `.firebaserc` and replace `your-firebase-project-id`.
+
+4. **Deploy**
+   ```bash
+   npm run deploy:firebase
+   ```
+
+5. **What gets deployed**
+   - Cloud Function: `api` (Node.js 20)
+   - Hosting rewrite: all routes to `api`
+   - Frontend: built from `client/dist`
+
 ## 🔧 Environment Configuration
 
 For production deployments, create environment variables:
@@ -154,5 +185,38 @@ For multiple regions:
 1. Deploy to multiple Azure regions
 2. Use Azure Traffic Manager for load balancing
 3. Consider CDN for static assets
+
+## 🛰️ Hybrid Deployment (Firebase + Render)
+
+This is the recommended way to get a stable, free backend and global frontend.
+
+### 1. Backend (Render)
+1. Go to [Render.com](https://render.com) and create a **Web Service**.
+2. Connect your repository.
+3. Configure:
+   - **Runtime**: `Node`
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm run start:api`
+   - **Environment Variables**:
+     - `API_ONLY`: `true`
+     - `PORT`: `10000`
+4. Copy your Render URL (e.g., `https://weather-agent.onrender.com`).
+
+### 2. Frontend (Firebase)
+1. In your local terminal, run the special hybrid build:
+   ```bash
+   # Replace with your actual Render URL
+   set VITE_API_BASE_URL=https://your-render-url.onrender.com
+   cd client
+   npm install
+   npm run build
+   cd ..
+   ```
+2. Deploy to Firebase Hosting:
+   ```bash
+   firebase deploy --only hosting
+   ```
+
+---
 
 Choose the deployment option that best fits your needs and budget! 🚀

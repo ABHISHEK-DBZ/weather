@@ -7,36 +7,139 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const isDirectRun = require.main === module;
 const IS_API_ONLY = process.env.API_ONLY === 'true';
+const SERVER_START_TIME = Date.now();
 
-// ─── Firebase Initialization ──────────────────────────────────────────────────
+// ─── Database Initialization (Hybrid Firestore/SQLite) ──────────────────────────
 const admin = require('firebase-admin');
 const functions = require('firebase-functions');
+const sqlite3 = require('sqlite3').verbose();
 
 // Initialize Firebase Admin
-if (admin.apps.length === 0) {
-  admin.initializeApp();
+let isFirestoreAvailable = false;
+try {
+  if (admin.apps.length === 0) {
+    admin.initializeApp();
+  }
+  isFirestoreAvailable = true;
+  console.log('✅ Firestore Admin initialized');
+} catch (e) {
+  console.warn('⚠️ Firestore connection failed (likely missing credentials). Falling back to SQLite.');
 }
 
-const db = admin.firestore();
+const db = isFirestoreAvailable ? admin.firestore() : null;
 const LOG_COLLECTION = 'SearchLogs';
+const FARMER_COLLECTION = 'Farmers';
 
-// Helper for Firestore-based queries
-const firestoreAdd = async (data) => {
-  return await db.collection(LOG_COLLECTION).add({
-    ...data,
-    createdAt: admin.firestore.FieldValue.serverTimestamp()
-  });
+// Initialize SQLite fallback
+const sqlDb = new sqlite3.Database(path.join(__dirname, 'prisma', 'weather.db'), (err) => {
+  if (err) console.error('Failed to open SQLite database:', err.message);
+  else console.log('✅ SQLite database connected');
+});
+
+// Ensure tables exist in SQLite
+sqlDb.serialize(() => {
+  sqlDb.run(`CREATE TABLE IF NOT EXISTS SearchLogs (
+    id TEXT PRIMARY KEY,
+    userIp TEXT,
+    searchQuery TEXT,
+    latitude REAL,
+    longitude REAL,
+    weatherResult TEXT,
+    temperature REAL,
+    soilTemperature REAL,
+    soilMoisture REAL,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  sqlDb.run(`CREATE TABLE IF NOT EXISTS Farmers (
+    chatId TEXT PRIMARY KEY,
+    latitude REAL,
+    longitude REAL,
+    city TEXT,
+    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+});
+
+// Helper for Hybrid Database queries
+const universalAdd = async (collection, data, docId = null) => {
+  const timestamp = new Date().toISOString();
+  
+  if (isFirestoreAvailable) {
+    try {
+      if (docId) {
+        await db.collection(collection).doc(docId.toString()).set({ ...data, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      } else {
+        await db.collection(collection).add({ ...data, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      }
+      return;
+    } catch (e) {
+      console.error(`Firestore write failed for ${collection}:`, e.message);
+    }
+  }
+
+  // SQLite Fallback
+  if (collection === FARMER_COLLECTION) {
+    const { chatId, latitude, longitude, city } = data;
+    sqlDb.run(`INSERT INTO Farmers (chatId, latitude, longitude, city, updatedAt) 
+               VALUES (?, ?, ?, ?, ?) 
+               ON CONFLICT(chatId) DO UPDATE SET latitude=excluded.latitude, longitude=excluded.longitude, city=excluded.city, updatedAt=excluded.updatedAt`,
+               [chatId, latitude, longitude, city, timestamp]);
+  } else {
+    const { userIp, searchQuery, latitude, longitude, weatherResult, temperature, soilTemperature, soilMoisture } = data;
+    sqlDb.run(`INSERT INTO SearchLogs (id, userIp, searchQuery, latitude, longitude, weatherResult, temperature, soilTemperature, soilMoisture) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               [Math.random().toString(36).substr(2, 9), userIp, searchQuery, latitude, longitude, weatherResult, temperature, soilTemperature, soilMoisture]);
+  }
 };
 
 const getAnalytics = async () => {
-  const snapshot = await db.collection(LOG_COLLECTION).get();
-  const totalSearches = snapshot.size;
-  
-  // Group by searchQuery manually (Firestore doesn't have native GROUP BY)
+  let logs = [];
+  let farmersCount = 0;
+
+  if (isFirestoreAvailable) {
+    try {
+      const logSnapshot = await db.collection(LOG_COLLECTION).get();
+      logSnapshot.forEach(doc => logs.push(doc.data()));
+      const farmerSnapshot = await db.collection(FARMER_COLLECTION).get();
+      farmersCount = farmerSnapshot.size;
+      console.log(`[DEBUG] Firestore: ${logs.length} logs, ${farmersCount} farmers`);
+    } catch (e) {
+      console.warn("Firestore analytics fetch failed (late):", e.message);
+      isFirestoreAvailable = false;
+    }
+  }
+
+  // Merge with SQLite results if running locally
+  await new Promise((resolve) => {
+    sqlDb.all(`SELECT * FROM SearchLogs`, [], (err, rows) => {
+      if (!err && rows) {
+        logs = logs.concat(rows);
+      }
+      sqlDb.get(`SELECT COUNT(*) as count FROM Farmers`, [], (err, row) => {
+        const sqlCount = (row && row.count) || 0;
+        console.log(`[DEBUG] SQLite: ${rows ? rows.length : 0} logs, ${sqlCount} farmers`);
+        
+        // If firestore failed or is empty, use SQLite count. 
+        // Or if they overlap, we should ideally count unique chatIds.
+        // For simplicity, let's just use the max for now, but ensure we add any unique local ones.
+        if (sqlCount > farmersCount) {
+          farmersCount = sqlCount;
+        }
+        resolve();
+      });
+    });
+  });
+
+  console.log(`[DEBUG] Total merged: ${logs.length} logs, ${farmersCount} farmers`);
+
+  const totalSearches = logs.length;
   const cityCounts = {};
-  snapshot.forEach(doc => {
-    const query = doc.data().searchQuery;
+  let totalSoilTemp = 0, soilTempCount = 0, totalSoilMoisture = 0, soilMoistureCount = 0;
+
+  logs.forEach(data => {
+    const query = data.searchQuery;
     cityCounts[query] = (cityCounts[query] || 0) + 1;
+    if (data.soilTemperature) { totalSoilTemp += data.soilTemperature; soilTempCount++; }
+    if (data.soilMoisture) { totalSoilMoisture += data.soilMoisture; soilMoistureCount++; }
   });
 
   const topCities = Object.entries(cityCounts)
@@ -44,7 +147,24 @@ const getAnalytics = async () => {
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
 
-  return { totalSearches, topCities };
+  const uniqueNodes = new Set(logs.map(l => `${l.latitude},${l.longitude}`)).size;
+  const now = Date.now();
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+  const dailyIntensity = logs.filter(l => {
+    const ts = l.createdAt ? new Date(l.createdAt).getTime() : 0;
+    return ts > oneDayAgo;
+  }).length;
+
+  return { 
+    totalSearches, 
+    topCities, 
+    totalFarmers: farmersCount,
+    avgSoilTemp: soilTempCount > 0 ? (totalSoilTemp / soilTempCount).toFixed(1) : 0,
+    avgSoilMoisture: soilMoistureCount > 0 ? (totalSoilMoisture / soilMoistureCount).toFixed(2) : 0,
+    uptime: Math.floor((now - SERVER_START_TIME) / 1000),
+    geoNodes: uniqueNodes,
+    dailyIntensity
+  };
 };
 
 const extractCityFromQuery = (query = '') => {
@@ -95,20 +215,80 @@ apiRouter.get('/health', (req, res) => {
   });
 });
 
+// POST: Register a farmer for alerts
+apiRouter.post('/register-farmer', async (req, res) => {
+  try {
+    const { chatId, latitude, longitude, city } = req.body;
+    if (!chatId || latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    await universalAdd(FARMER_COLLECTION, {
+      chatId: chatId.toString(),
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      city: city || 'Unknown'
+    }, chatId);
+
+    res.status(200).json({ success: true, message: 'Farmer registered successfully' });
+  } catch (error) {
+    console.error('Failed to register farmer:', error.message);
+    res.status(500).json({ success: false, error: 'Registration failed' });
+  }
+});
+
+// GET: List all farmers (Internal use for alert system)
+apiRouter.get('/farmers-list', async (req, res) => {
+  try {
+    let farmers = [];
+    if (isFirestoreAvailable) {
+      try {
+        const snapshot = await db.collection(FARMER_COLLECTION).get();
+        snapshot.forEach(doc => farmers.push(doc.data()));
+      } catch (e) {
+        console.warn("Firestore list-farmers failed (late):", e.message);
+        isFirestoreAvailable = false;
+      }
+    }
+    
+    // Supplement with SQLite
+    await new Promise(resolve => {
+      sqlDb.all(`SELECT * FROM Farmers`, [], (err, rows) => {
+        if (!err) {
+          // Merge logic: prefer firestore if duplicate chatId found in memory
+          rows.forEach(r => {
+            if (!farmers.find(f => f.chatId.toString() === r.chatId.toString())) {
+              farmers.push(r);
+            }
+          });
+        }
+        resolve();
+      });
+    });
+
+    res.json({ success: true, farmers });
+  } catch (error) {
+    console.error('Failed to list farmers:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch farmers' });
+  }
+});
+
 // POST: Log a successful weather search
 apiRouter.post('/log-search', async (req, res) => {
   try {
-    const { searchQuery, latitude, longitude, weatherResult, temperature, userId } = req.body;
+    const { searchQuery, latitude, longitude, weatherResult, temperature, userId, soilTemperature, soilMoisture } = req.body;
     const userIp = req.ip || '127.0.0.1';
     
-    await firestoreAdd({
+    await universalAdd(LOG_COLLECTION, {
       userId: userId || null,
       userIp,
       searchQuery,
       latitude: parseFloat(latitude),
       longitude: parseFloat(longitude),
       weatherResult,
-      temperature: parseFloat(temperature)
+      temperature: parseFloat(temperature),
+      soilTemperature: soilTemperature ? parseFloat(soilTemperature) : null,
+      soilMoisture: soilMoisture ? parseFloat(soilMoisture) : null
     });
     
     res.status(201).json({ success: true, message: 'Log saved' });
@@ -121,21 +301,21 @@ apiRouter.post('/log-search', async (req, res) => {
 // GET: Analytics
 apiRouter.get('/analytics', async (req, res) => {
   try {
-    const { totalSearches, topCities } = await getAnalytics();
+    const analytics = await getAnalytics();
     
-    const mappedCities = topCities.map(c => ({
+    const mappedCities = analytics.topCities.map(c => ({
       searchQuery: c.searchQuery,
       _count: { searchQuery: c.count }
     }));
 
     res.json({ 
       success: true, 
-      totalSearches, 
+      ...analytics,
       topCities: mappedCities 
     });
   } catch (error) {
     console.error('Analytics error:', error.message);
-    res.json({ success: true, totalSearches: 0, topCities: [] });
+    res.json({ success: true, totalSearches: 0, topCities: [], totalFarmers: 0, avgSoilTemp: 0, avgSoilMoisture: 0 });
   }
 });
 
@@ -143,19 +323,25 @@ apiRouter.get('/analytics', async (req, res) => {
 apiRouter.get('/export-data', async (req, res) => {
   try {
     const { parse } = require('json2csv');
-    const snapshot = await db.collection(LOG_COLLECTION).orderBy('createdAt', 'desc').get();
+    const { type } = req.query; // 'logs' or 'farmers'
+    
+    const collectionName = type === 'farmers' ? FARMER_COLLECTION : LOG_COLLECTION;
+    const snapshot = await db.collection(collectionName).orderBy('createdAt', 'desc').get();
     
     if (snapshot.empty) {
       return res.status(404).json({ error: 'No data to export yet' });
     }
     
-    const logs = [];
-    snapshot.forEach(doc => logs.push({ id: doc.id, ...doc.data() }));
+    const data = [];
+    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
     
-    const fields = ['id', 'userIp', 'searchQuery', 'latitude', 'longitude', 'weatherResult', 'temperature', 'createdAt'];
-    const csv = parse(logs, { fields });
+    const fields = type === 'farmers' 
+      ? ['id', 'chatId', 'city', 'latitude', 'longitude', 'updatedAt']
+      : ['id', 'userIp', 'searchQuery', 'latitude', 'longitude', 'weatherResult', 'temperature', 'soilTemperature', 'soilMoisture', 'createdAt'];
+    
+    const csv = parse(data, { fields });
     res.header('Content-Type', 'text/csv');
-    res.attachment('weather_search_logs.csv');
+    res.attachment(`${collectionName}_export.csv`);
     return res.send(csv);
   } catch (error) {
     console.error('Export error:', error.message);
@@ -200,13 +386,15 @@ apiRouter.post('/ai-chat', async (req, res) => {
     }
     
     if (result.success && result.data && result.data.city) {
-      firestoreAdd({
+      universalAdd(LOG_COLLECTION, {
         searchQuery: `AI: ${query}`, 
         userIp: req.ip || '127.0.0.1', 
         weatherResult: 'AI Analysis',
         temperature: parseFloat(result.data.temperature) || 0,
         latitude: parseFloat(result.data.latitude) || 0,
-        longitude: parseFloat(result.data.longitude) || 0
+        longitude: parseFloat(result.data.longitude) || 0,
+        soilTemperature: result.data.advancedData?.soilTemperature || null,
+        soilMoisture: result.data.advancedData?.soilMoisture || null
       }).catch(e => console.error("Logging AI search failed:", e));
     }
 
