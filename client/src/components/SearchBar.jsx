@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { apiUrl } from '../utils/api';
+import ProfileForm from './ProfileForm';
+import AgriDashboardUI from './AgriDashboardUI';
 
 // ─── Weather helpers ─────────────────────────────────────────────────────────
 const getWeatherIcon = (code, isDay) => {
@@ -328,6 +330,8 @@ const S = {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function SearchBar({ onSearchComplete }) {
+  const [profile, setProfile] = useState(() => JSON.parse(localStorage.getItem('agriProfile')) || null);
+  const [agriData, setAgriData] = useState(null);
   const [query,   setQuery]   = useState('');
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
@@ -337,8 +341,17 @@ export default function SearchBar({ onSearchComplete }) {
   const [alert, setAlert] = useState(null);
   const [mode, setMode] = useState('weather'); // 'weather' or 'ai'
 
+  const handleSaveProfile = async (data) => {
+    localStorage.setItem('agriProfile', JSON.stringify(data));
+    setProfile(data);
+    setQuery(data.city); // Auto-fill the search with the profile city
+    
+    // Trigger the search directly bypassing DOM clicks
+    execSearch(data.city, data);
+  };
+
   useEffect(() => {
-    if (result) {
+    if (result && !agriData) {
       if (result.code >= 95) {
         setAlert({
           title: 'Severe Thunderstorm Warning',
@@ -361,8 +374,12 @@ export default function SearchBar({ onSearchComplete }) {
   }, [result]);
 
   const handleSearch = async (e) => {
-    e.preventDefault();
-    const q = query.trim();
+    if (e) e.preventDefault();
+    await execSearch(query);
+  };
+
+  const execSearch = async (searchStr, currentProfile = profile) => {
+    const q = (searchStr || '').trim();
     if (!q) return;
     setLoading(true);
     setError('');
@@ -400,15 +417,31 @@ export default function SearchBar({ onSearchComplete }) {
         setResult(combined);
         onSearchComplete(combined);
 
-        // Fetch 5-day forecast from our backend
+        // Fetch comprehensive Agri-Dashboard data
         try {
-          const forecastRes = await fetch(apiUrl(`/api/forecast/${geo.name}`));
-          const forecastData = await forecastRes.json();
-          if (forecastData.success) {
-            setForecast(forecastData.data.forecast);
+          // Use currentProfile explicitly if available (for exact moment of saving)
+          const activeProfile = currentProfile || JSON.parse(localStorage.getItem('agriProfile'));
+          const agriRes = await fetch(apiUrl('/api/agri-dashboard'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile: { ...activeProfile, city: geo.name } })
+          });
+          const fetchedAgriData = await agriRes.json();
+          if (fetchedAgriData.success) {
+            setAgriData(fetchedAgriData.data);
+            if (fetchedAgriData.data.extremeAlerts && fetchedAgriData.data.extremeAlerts.length > 0) {
+              setAlert({
+                title: fetchedAgriData.data.extremeAlerts[0].type,
+                desc: fetchedAgriData.data.extremeAlerts[0].message
+              });
+            } else {
+              setAlert(null); // Clear previous alerts
+            }
+          } else {
+            setError(fetchedAgriData.error || 'Failed to generate agricultural dashboard.');
           }
-        } catch (fErr) {
-          console.warn("Forecast fetch failed:", fErr);
+        } catch (err) {
+          console.warn('Agri API failed', err);
         }
 
         fetch(apiUrl('/api/log-search'), {
@@ -461,42 +494,54 @@ export default function SearchBar({ onSearchComplete }) {
       </AnimatePresence>
 
       <div style={S.overlay}>
-        <motion.div
-          style={S.searchWrap}
-          initial={{ y: -50, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.3, type: 'spring', stiffness: 200 }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <div style={S.modeToggle}>
-              <button onClick={() => setMode('weather')} style={S.modeBtn(mode === 'weather')}>STANDARD</button>
-              <button onClick={() => setMode('ai')} style={S.modeBtn(mode === 'ai')}>AI AGENT 🤖</button>
+        {!profile ? (
+          <motion.div style={{marginTop: 60, width: '100%', maxWidth: 520, padding: '0 16px', display:'flex', justifyContent:'center'}}>
+            <ProfileForm onSave={handleSaveProfile} />
+          </motion.div>
+        ) : (
+          <motion.div
+            style={S.searchWrap}
+            initial={{ y: -50, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.1, type: 'spring', stiffness: 200 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <div style={S.modeToggle}>
+                <button onClick={() => setMode('weather')} style={S.modeBtn(mode === 'weather')}>FARM DASHBOARD</button>
+                <button onClick={() => setMode('ai')} style={S.modeBtn(mode === 'ai')}>AI AGENT 🤖</button>
+              </div>
             </div>
-          </div>
 
-          <form onSubmit={handleSearch} style={S.form}>
-            <div style={S.glow(accent)} />
-            <div style={S.inputWrap}>
-              <span style={S.globe}>{mode === 'ai' ? '🤖' : '🌍'}</span>
-              <input
-                type="text"
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder={mode === 'ai' ? "Ask AI about weather..." : "Search city..."}
-                style={S.input}
-              />
-              {loading && <div style={S.loadingTag}>Analysing...</div>}
-              <button type="submit" disabled={loading} style={{ ...S.btn(accent), opacity: loading ? 0.6 : 1 }}>
-                {loading ? '...' : (mode === 'ai' ? 'Ask AI' : 'Search')}
-              </button>
-            </div>
-          </form>
+            <form onSubmit={handleSearch} style={S.form}>
+              <div style={S.glow(accent)} />
+              <div style={S.inputWrap}>
+                <span style={S.globe}>{mode === 'ai' ? '🤖' : '🌍'}</span>
+                <input
+                  type="text"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder={mode === 'ai' ? "Ask AI about weather..." : "Search farm location..."}
+                  style={S.input}
+                />
+                {loading && <div style={S.loadingTag}>Analysing...</div>}
+                <button id="search-form-btn" type="submit" disabled={loading} style={{ ...S.btn(accent), opacity: loading ? 0.6 : 1 }}>
+                  {loading ? '...' : (mode === 'ai' ? 'Ask AI' : 'Search')}
+                </button>
+              </div>
+            </form>
 
-          {error && <motion.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} style={S.error}>⚠ {error}</motion.p>}
-        </motion.div>
+            {error && <motion.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} style={S.error}>⚠ {error}</motion.p>}
+          </motion.div>
+        )}
 
         <AnimatePresence>
-          {result && (
+          {profile && agriData && (
+             <motion.div style={{marginTop: 12, width: '100%', maxWidth: 1000, padding: '0 16px'}} initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}>
+                <AgriDashboardUI data={agriData} profile={profile} />
+             </motion.div>
+          )}
+
+          {profile && result && !agriData && !aiResponse && (
             <motion.div key={result.name} style={S.card(accent)} initial={{ opacity: 0, scale: 0.85, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.85, y: 20 }}>
               <div style={S.cardInner(accent)}>
                 <div style={S.row}>
@@ -527,34 +572,16 @@ export default function SearchBar({ onSearchComplete }) {
                   ))}
                 </div>
                 <div style={S.coords}>{result.lat.toFixed(2)}°N, {result.lon.toFixed(2)}°E · Open-Meteo</div>
-
-                {forecast && forecast.length > 0 && (
-                  <div style={S.forecastWrap}>
-                    <div style={S.forecastTitle}>5-Day Outlook</div>
-                    <div style={S.forecastGrid}>
-                      {forecast.map((f, idx) => (
-                        <div key={idx} style={S.forecastItem}>
-                          <div style={S.forecastDay}>
-                            {f.date.split('-').slice(1).reverse().join('/')}
-                          </div>
-                          <div style={S.forecastIcon}>{getWeatherIcon(f.code, true)}</div>
-                          <div style={S.forecastTemp}>{f.tempMax}°</div>
-                          <div style={S.forecastDesc}>{f.description}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             </motion.div>
           )}
 
-          {aiResponse && (
+          {profile && aiResponse && (
             <motion.div style={S.aiContainer} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}>
               <div style={S.aiInner}>
                 <div style={S.aiHeader}>
                   <div style={S.aiAvatar}>🤖</div>
-                  <div style={S.aiTitle}>AI Weather Assistant</div>
+                  <div style={S.aiTitle}>Agri Weather Assistant</div>
                 </div>
                 <div style={S.aiContent}>{aiResponse}</div>
               </div>

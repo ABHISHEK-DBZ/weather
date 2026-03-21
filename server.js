@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
+const AgriEngine = require('./agri_engine');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -55,6 +56,12 @@ sqlDb.serialize(() => {
     latitude REAL,
     longitude REAL,
     city TEXT,
+    cropType TEXT,
+    growthStage TEXT,
+    farmSize REAL,
+    irrigationMethod TEXT,
+    language TEXT,
+    alertChannel TEXT,
     updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 });
@@ -78,11 +85,21 @@ const universalAdd = async (collection, data, docId = null) => {
 
   // SQLite Fallback
   if (collection === FARMER_COLLECTION) {
-    const { chatId, latitude, longitude, city } = data;
-    sqlDb.run(`INSERT INTO Farmers (chatId, latitude, longitude, city, updatedAt) 
-               VALUES (?, ?, ?, ?, ?) 
-               ON CONFLICT(chatId) DO UPDATE SET latitude=excluded.latitude, longitude=excluded.longitude, city=excluded.city, updatedAt=excluded.updatedAt`,
-               [chatId, latitude, longitude, city, timestamp]);
+    const { chatId, latitude, longitude, city, cropType, growthStage, farmSize, irrigationMethod, language, alertChannel } = data;
+    sqlDb.run(`INSERT INTO Farmers (chatId, latitude, longitude, city, cropType, growthStage, farmSize, irrigationMethod, language, alertChannel, updatedAt) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+               ON CONFLICT(chatId) DO UPDATE SET 
+                 latitude=excluded.latitude, 
+                 longitude=excluded.longitude, 
+                 city=excluded.city, 
+                 cropType=excluded.cropType, 
+                 growthStage=excluded.growthStage, 
+                 farmSize=excluded.farmSize, 
+                 irrigationMethod=excluded.irrigationMethod, 
+                 language=excluded.language, 
+                 alertChannel=excluded.alertChannel, 
+                 updatedAt=excluded.updatedAt`,
+               [chatId, latitude, longitude, city, cropType, growthStage, farmSize, irrigationMethod, language, alertChannel, timestamp]);
   } else {
     const { userIp, searchQuery, latitude, longitude, weatherResult, temperature, soilTemperature, soilMoisture } = data;
     sqlDb.run(`INSERT INTO SearchLogs (id, userIp, searchQuery, latitude, longitude, weatherResult, temperature, soilTemperature, soilMoisture) 
@@ -215,10 +232,14 @@ apiRouter.get('/health', (req, res) => {
   });
 });
 
-// POST: Register a farmer for alerts
+// POST: Register a farmer for alerts / profile
 apiRouter.post('/register-farmer', async (req, res) => {
   try {
-    const { chatId, latitude, longitude, city } = req.body;
+    const { 
+      chatId, latitude, longitude, city,
+      cropType, growthStage, farmSize, irrigationMethod, language, alertChannel
+    } = req.body;
+    
     if (!chatId || latitude === undefined || longitude === undefined) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
@@ -227,13 +248,19 @@ apiRouter.post('/register-farmer', async (req, res) => {
       chatId: chatId.toString(),
       latitude: parseFloat(latitude),
       longitude: parseFloat(longitude),
-      city: city || 'Unknown'
+      city: city || 'Unknown',
+      cropType: cropType || null,
+      growthStage: growthStage || null,
+      farmSize: farmSize ? parseFloat(farmSize) : null,
+      irrigationMethod: irrigationMethod || null,
+      language: language || 'en',
+      alertChannel: alertChannel || 'in-app'
     }, chatId);
 
-    res.status(200).json({ success: true, message: 'Farmer registered successfully' });
+    res.status(200).json({ success: true, message: 'Farmer profile updated successfully' });
   } catch (error) {
-    console.error('Failed to register farmer:', error.message);
-    res.status(500).json({ success: false, error: 'Registration failed' });
+    console.error('Failed to update farmer profile:', error.message);
+    res.status(500).json({ success: false, error: 'Profile update failed' });
   }
 });
 
@@ -303,8 +330,10 @@ apiRouter.get('/analytics', async (req, res) => {
   try {
     const analytics = await getAnalytics();
     
+    // The frontend expects c.searchQuery and c.count directly
     const mappedCities = analytics.topCities.map(c => ({
       searchQuery: c.searchQuery,
+      count: c.count,
       _count: { searchQuery: c.count }
     }));
 
@@ -326,20 +355,41 @@ apiRouter.get('/export-data', async (req, res) => {
     const { type } = req.query; // 'logs' or 'farmers'
     
     const collectionName = type === 'farmers' ? FARMER_COLLECTION : LOG_COLLECTION;
-    const snapshot = await db.collection(collectionName).orderBy('createdAt', 'desc').get();
+    const sqlTable = type === 'farmers' ? 'Farmers' : 'SearchLogs';
     
-    if (snapshot.empty) {
+    let data = [];
+    
+    // Try Firestore first
+    if (isFirestoreAvailable) {
+      try {
+        const snapshot = await db.collection(collectionName).get(); // OrderBy might fail without indexes, keep simple
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+      } catch (e) {
+        console.warn("Firestore export failed, falling back to SQLite");
+        isFirestoreAvailable = false; 
+      }
+    }
+    
+    // Supplement with SQLite
+    if (!isFirestoreAvailable || data.length === 0) {
+      await new Promise((resolve, reject) => {
+        sqlDb.all(`SELECT * FROM ${sqlTable}`, [], (err, rows) => {
+          if (err) return reject(err);
+          data = rows;
+          resolve();
+        });
+      });
+    }
+    
+    if (data.length === 0) {
       return res.status(404).json({ error: 'No data to export yet' });
     }
     
-    const data = [];
-    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-    
     const fields = type === 'farmers' 
-      ? ['id', 'chatId', 'city', 'latitude', 'longitude', 'updatedAt']
-      : ['id', 'userIp', 'searchQuery', 'latitude', 'longitude', 'weatherResult', 'temperature', 'soilTemperature', 'soilMoisture', 'createdAt'];
+      ? ['chatId', 'city', 'cropType', 'growthStage', 'farmSize', 'irrigationMethod']
+      : ['searchQuery', 'latitude', 'longitude', 'weatherResult', 'temperature', 'soilMoisture', 'timestamp'];
     
-    const csv = parse(data, { fields });
+    const csv = parse(data, { fields: fields.filter(f => Object.keys(data[0]).includes(f)) });
     res.header('Content-Type', 'text/csv');
     res.attachment(`${collectionName}_export.csv`);
     return res.send(csv);
@@ -430,6 +480,117 @@ apiRouter.get('/forecast/:city', async (req, res) => {
 apiRouter.get('/weather/compare/:city', async (req, res) => {
   const ourData = await weatherAgent.getCurrentWeather(req.params.city);
   res.json({ success: true, city: req.params.city, data: ourData.data });
+});
+
+// NEW POST: Comprehensive Agri-Dashboard Endpoint
+apiRouter.post('/agri-dashboard', async (req, res) => {
+  try {
+    const { profile } = req.body; // e.g., { city, cropType, growthStage, farmSize, irrigationMethod, ... }
+    
+    if (!profile || !profile.city) {
+      return res.status(400).json({ success: false, error: 'Profile with city is required.' });
+    }
+
+    // 1. Fetch current and 14-day data
+    const currentRes = await weatherAgent.getCurrentWeather(profile.city);
+    if (!currentRes.success) return res.status(404).json(currentRes);
+    
+    const forecastRes = await weatherAgent.getForecast(profile.city);
+    if (!forecastRes.success) return res.status(404).json(forecastRes);
+
+    // 2. Generate Agri Dashboard Payload (Features 1-8)
+    const dashboardData = AgriEngine.generateDashboard(currentRes.data, forecastRes.data, profile);
+
+    res.json({ success: true, data: dashboardData });
+  } catch (error) {
+    console.error('Agri-Dashboard Generation Error:', error.message);
+    res.status(500).json({ success: false, error: 'Dashboard generation failed' });
+  }
+});
+
+// NEW POST: Agriculture-Only Export Engine (Feature 9)
+apiRouter.post('/agri-export', async (req, res) => {
+  try {
+    const { profile, format } = req.body; // format 'json' or 'csv'
+    
+    if (!profile || !profile.city) {
+      return res.status(400).json({ success: false, error: 'Profile required' });
+    }
+
+    const currentRes = await weatherAgent.getCurrentWeather(profile.city);
+    const forecastRes = await weatherAgent.getForecast(profile.city);
+    if (!currentRes.success || !forecastRes.success) return res.status(404).json({error: 'Data fetch failed'});
+
+    const dashboardData = AgriEngine.generateDashboard(currentRes.data, forecastRes.data, profile);
+    const today = new Date().toISOString().split('T')[0];
+
+    const exportDataArray = dashboardData.forecast.map(day => {
+      const dayAlerts = dashboardData.extremeAlerts.filter(a => a.message.includes(day.date)).map(a => a.type) || [];
+      return {
+        date: day.date,
+        minTemp: day.tempMin,
+        maxTemp: day.tempMax,
+        avgTemp: Math.round((day.tempMax + day.tempMin) / 2),
+        rainfall: day.precip || 0,
+        humidity: currentRes.data.humidity,
+        windSpeed: day.windSpeedMax || 0,
+        et0: day.et0 || 0,
+        soilMoisture: dashboardData.soilAdvisory.moistureLevel,
+        irrigationRec: dashboardData.irrigationAdvisory.needed !== 'No',
+        irrigationVol: parseFloat(dashboardData.irrigationAdvisory.recommendedQuantity) || 0,
+        pestRisk: dashboardData.pestAlerts[0]?.level.replace(/[^a-zA-Z]/g, '').trim() || 'Low',
+        cropAdvisory: day.cropAdvisory || '',
+        alerts: dayAlerts.length > 0 ? dayAlerts.join(';') : 'None'
+      };
+    });
+
+    if (format === 'csv') {
+      const { parse } = require('json2csv');
+      const csvData = exportDataArray.map(d => ({
+        Date: d.date,
+        Min_Temp_C: d.minTemp,
+        Max_Temp_C: d.maxTemp,
+        Avg_Temp_C: d.avgTemp,
+        Rainfall_mm: d.rainfall,
+        Humidity_pct: d.humidity,
+        Wind_Speed_kmh: d.windSpeed,
+        ET0_mm: d.et0,
+        Soil_Moisture: d.soilMoisture,
+        Irrigation_Recommended: d.irrigationRec ? 'Yes' : 'No',
+        Pest_Risk_Level: d.pestRisk,
+        Crop_Advisory: d.cropAdvisory,
+        Alert_Flags: d.alerts
+      }));
+      
+      const csv = parse(csvData);
+      res.header('Content-Type', 'text/csv');
+      res.attachment(`AgriReport_${profile.cropType}_${today}.csv`);
+      return res.send(csv);
+    }
+
+    // Default JSON
+    res.json({
+      farm_id: profile.chatId || 'web-user',
+      crop: profile.cropType,
+      export_date: today,
+      data: exportDataArray.map(d => ({
+        date: d.date,
+        temperature: { min: d.minTemp, max: d.maxTemp, avg: d.avgTemp, unit: "C" },
+        rainfall_mm: d.rainfall,
+        humidity_pct: d.humidity,
+        wind_speed_kmh: d.windSpeed,
+        et0_mm: d.et0,
+        soil_moisture: d.soilMoisture,
+        irrigation: { recommended: d.irrigationRec, volume_mm: d.irrigationVol },
+        pest_risk: d.pestRisk,
+        crop_advisory: d.cropAdvisory,
+        alerts: d.alerts === 'None' ? [] : d.alerts.split(';')
+      }))
+    });
+  } catch (error) {
+    console.error('Agri Export Error:', error.message);
+    res.status(500).json({ error: 'Export generation failed' });
+  }
 });
 
 // Mount the router on both /api and / to handle different environments
@@ -1078,43 +1239,31 @@ class WeatherAgent {
     return suggestions;
   }
 
-  // Process advanced weather data from enhanced API
+  // Process advanced agricultural weather data
   processAdvancedWeatherData(hourly, currentHour) {
     if (!hourly || currentHour < 0) return {};
     
     const advancedData = {};
     
     // Soil data analysis
-    if (hourly.soil_moisture_27_to_81cm && hourly.soil_moisture_27_to_81cm[currentHour] !== undefined) {
-      const soilMoisture = hourly.soil_moisture_27_to_81cm[currentHour];
+    if (hourly.soil_moisture_3_to_9cm && hourly.soil_moisture_3_to_9cm[currentHour] !== undefined) {
+      const soilMoisture = hourly.soil_moisture_3_to_9cm[currentHour];
       advancedData.soilMoisture = soilMoisture;
       advancedData.soilCondition = this.analyzeSoilCondition(soilMoisture);
     }
     
-    if (hourly.soil_temperature_54cm && hourly.soil_temperature_54cm[currentHour] !== undefined) {
-      advancedData.soilTemperature = hourly.soil_temperature_54cm[currentHour];
+    if (hourly.soil_temperature_6cm && hourly.soil_temperature_6cm[currentHour] !== undefined) {
+      advancedData.soilTemperature = hourly.soil_temperature_6cm[currentHour];
     }
     
-    // High altitude wind analysis
-    if (hourly.wind_speed_180m && hourly.wind_speed_180m[currentHour] !== undefined) {
-      advancedData.highAltitudeWindSpeed = hourly.wind_speed_180m[currentHour];
-      advancedData.windShear = this.calculateWindShear(
-        hourly.wind_speed_180m[currentHour],
-        currentHour
-      );
+    // Evapotranspiration
+    if (hourly.et0_fao_evapotranspiration && hourly.et0_fao_evapotranspiration[currentHour] !== undefined) {
+      advancedData.evapotranspiration = hourly.et0_fao_evapotranspiration[currentHour];
     }
     
-    if (hourly.wind_direction_180m && hourly.wind_direction_180m[currentHour] !== undefined) {
-      advancedData.highAltitudeWindDirection = hourly.wind_direction_180m[currentHour];
-    }
-    
-    // High altitude temperature
-    if (hourly.temperature_180m && hourly.temperature_180m[currentHour] !== undefined) {
-      advancedData.highAltitudeTemperature = hourly.temperature_180m[currentHour];
-      advancedData.temperatureGradient = this.calculateTemperatureGradient(
-        hourly.temperature_180m[currentHour],
-        currentHour
-      );
+    // Dew Point
+    if (hourly.dew_point_2m && hourly.dew_point_2m[currentHour] !== undefined) {
+      advancedData.dewPoint = hourly.dew_point_2m[currentHour];
     }
     
     return advancedData;
@@ -1266,25 +1415,28 @@ class WeatherAgent {
           hourly: [
             'temperature_2m',
             'relative_humidity_2m',
+            'dew_point_2m',
             'precipitation_probability',
+            'precipitation',
             'weather_code',
             'apparent_temperature',
-            'soil_moisture_27_to_81cm',
-            'soil_temperature_54cm',
-            'wind_speed_180m',
-            'wind_direction_180m',
-            'temperature_180m',
+            'soil_moisture_3_to_9cm',
+            'soil_temperature_6cm',
+            'et0_fao_evapotranspiration',
+            'wind_speed_10m',
             'uv_index'
           ].join(','),
           daily: [
             'temperature_2m_max',
             'temperature_2m_min',
+            'precipitation_sum',
+            'et0_fao_evapotranspiration_sum',
             'weather_code'
           ].join(','),
           timezone: 'auto', // This ensures local timezone
-          forecast_days: 3,
+          forecast_days: 14,
           temperature_unit: 'celsius',
-          wind_speed_unit: 'ms',
+          wind_speed_unit: 'kmh',
           precipitation_unit: 'mm',
           timeformat: 'iso8601'
         }
@@ -1463,9 +1615,10 @@ class WeatherAgent {
         params: {
           latitude,
           longitude,
-          daily: 'temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max',
+          daily: 'temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration_sum,wind_speed_10m_max,weather_code',
           timezone: 'auto',
-          forecast_days: 5
+          forecast_days: 14,
+          wind_speed_unit: 'kmh'
         }
       });
       
@@ -1476,7 +1629,9 @@ class WeatherAgent {
           date: date, // Keep YYYY-MM-DD for easier frontend parsing
           tempMax: Math.round(daily.temperature_2m_max[index]),
           tempMin: Math.round(daily.temperature_2m_min[index]),
-          precipProb: daily.precipitation_probability_max[index],
+          precip: daily.precipitation_sum ? daily.precipitation_sum[index] : 0,
+          et0: daily.et0_fao_evapotranspiration_sum ? daily.et0_fao_evapotranspiration_sum[index] : 0,
+          windSpeedMax: daily.wind_speed_10m_max ? Math.round(daily.wind_speed_10m_max[index]) : 0,
           description: weatherInfo.description,
           icon: weatherInfo.icon,
           code: daily.weather_code[index]

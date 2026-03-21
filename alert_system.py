@@ -20,39 +20,61 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-def get_weather_alerts(lat, lon):
+def get_weather_alerts(lat, lon, crop, stage):
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
         "longitude": lon,
-        "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_sum"],
+        "daily": ["temperature_2m_max", "temperature_2m_min", "precipitation_sum", "et0_fao_evapotranspiration_sum"],
         "timezone": "auto",
-        "forecast_days": 1
+        "forecast_days": 10
     }
     try:
         response = requests.get(url, params=params)
         data = response.json()
         daily = data.get("daily", {})
         
-        weather_code = daily.get("weather_code", [0])[0]
-        min_temp = daily.get("temperature_2m_min", [99])[0]
-        precip = daily.get("precipitation_sum", [0])[0]
+        temps_max = daily.get("temperature_2m_max", [])
+        temps_min = daily.get("temperature_2m_min", [])
+        precips = daily.get("precipitation_sum", [])
+        dates = daily.get("time", [])
         
         alerts = []
-        # Alert Logic
-        if weather_code >= 60: # Rain codes start from 60
-            if precip > 10:
-                alerts.append("🌧️ Heavy Rain Alert! Today expect heavy precipitation.")
+        
+        # Frost Alert
+        for i in range(min(3, len(temps_min))):
+            if temps_min[i] <= 2:
+                alerts.append(f"⚠️ Frost Warning: Protect {crop} tonight. Cover young plants or use sprinkler frost protection. Expected low: {temps_min[i]}°C on {dates[i]}.")
+                break
+                
+        # Heat Stress Alert
+        high_temp_days = 0
+        for i in range(min(3, len(temps_max))):
+            if temps_max[i] >= 40:
+                high_temp_days += 1
             else:
-                alerts.append("🌦️ Rain Alert! Carry an umbrella or protect your crops.")
-        
-        if min_temp <= 2:
-            alerts.append("❄️ Frost Warning (Paala)! Temperature will drop near freezing. Protect sensitive crops.")
-        
-        if weather_code >= 95:
-            alerts.append("⛈️ Thunderstorm Warning! Stay safe indoors.")
+                high_temp_days = 0
+            if high_temp_days >= 2:
+                alerts.append(f"🌡️ Heat Stress Alert: {crop} at {stage} stage is at risk. Irrigate in early morning, apply mulch, avoid fertilizer application.")
+                break
+                
+        # Heavy Rain Alert
+        if len(precips) > 0 and precips[0] > 50:
+            alerts.append(f"🌧️ Heavy Rain Warning: Risk of waterlogging and root rot for {crop}. Ensure field drainage is clear. Avoid spraying operations.")
             
-        return alerts
+        # Dry Spell Alert
+        dry_days = 0
+        for i in range(len(precips)):
+            if precips[i] < 1:
+                dry_days += 1
+            else:
+                dry_days = 0
+                
+            if dry_days >= 10:
+                alerts.append(f"☀️ Dry Spell Alert: Soil moisture critically low. Prioritize irrigation for {crop} within next 48 hours.")
+                break
+            
+        return list(set(alerts)) # unique alerts
     except Exception as e:
         print(f"Error fetching weather: {e}")
         return []
@@ -81,12 +103,15 @@ def check_and_alert():
         lon = data.get("longitude")
         city = data.get("city", "your area")
         
+        crop = data.get("cropType", "crops")
+        stage = data.get("growthStage", "growing")
+        
         if not chat_id or lat is None or lon is None:
             continue
             
-        alerts = get_weather_alerts(lat, lon)
+        alerts = get_weather_alerts(lat, lon, crop, stage)
         if alerts:
-            msg = f"🌾 *Kisan Alert: {city}*\n\n" + "\n".join(alerts)
+            msg = f"🌾 *Agricultural Weather Alert: {city}*\n\n" + "\n\n".join(alerts)
             send_telegram_message(chat_id, msg)
             print(f"Sent alert to {chat_id} for {city}")
         else:
