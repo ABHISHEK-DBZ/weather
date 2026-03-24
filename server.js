@@ -676,6 +676,121 @@ class WeatherAgent {
     }
   }
 
+  mapConditionTextToWeatherCode(conditionText = '') {
+    const text = conditionText.toLowerCase();
+    if (text.includes('thunder')) return 95;
+    if (text.includes('snow')) return 73;
+    if (text.includes('sleet')) return 71;
+    if (text.includes('freezing')) return 66;
+    if (text.includes('rain') || text.includes('drizzle') || text.includes('shower')) return 61;
+    if (text.includes('fog') || text.includes('mist') || text.includes('haze')) return 45;
+    if (text.includes('overcast')) return 3;
+    if (text.includes('partly') || text.includes('cloud')) return 2;
+    if (text.includes('clear') || text.includes('sunny')) return 0;
+    return 1;
+  }
+
+  async getCurrentWeatherFromWttr(city) {
+    const wttrData = await this.httpGetJson(`https://wttr.in/${encodeURIComponent(city)}`, {
+      format: 'j1'
+    });
+
+    if (!wttrData.current_condition || !wttrData.current_condition[0]) {
+      return { success: false, error: 'Fallback provider returned no current weather.' };
+    }
+
+    const current = wttrData.current_condition[0];
+    const area = wttrData.nearest_area && wttrData.nearest_area[0] ? wttrData.nearest_area[0] : null;
+    const areaName = area && area.areaName && area.areaName[0] ? area.areaName[0].value : city;
+    const country = area && area.country && area.country[0] ? area.country[0].value : 'Unknown';
+    const description = current.weatherDesc && current.weatherDesc[0] ? current.weatherDesc[0].value : 'Unknown';
+    const code = this.mapConditionTextToWeatherCode(description);
+
+    return {
+      success: true,
+      data: {
+        city: areaName,
+        country,
+        temperature: parseFloat(current.temp_C) || 0,
+        feelsLike: parseFloat(current.FeelsLikeC) || parseFloat(current.temp_C) || 0,
+        apparentTemperature: parseFloat(current.FeelsLikeC) || parseFloat(current.temp_C) || 0,
+        description,
+        humidity: parseInt(current.humidity, 10) || 0,
+        windSpeed: parseFloat(current.windspeedKmph) || 0,
+        windDirection: null,
+        pressure: parseFloat(current.pressure) || null,
+        visibility: parseFloat(current.visibility) || null,
+        cloudCover: parseFloat(current.cloudcover) || null,
+        uvIndex: parseFloat(current.uvIndex) || null,
+        isDay: (current.isdaytime || '').toLowerCase() !== 'no',
+        icon: this.getWeatherDescription(code, true).icon,
+        recommendation: this.getWeatherRecommendation(parseFloat(current.temp_C) || 0, description),
+        coordinates: area && area.latitude && area.longitude ? `${area.latitude}, ${area.longitude}` : '0, 0',
+        timezone: wttrData.time_zone && wttrData.time_zone[0] ? wttrData.time_zone[0].timezone : 'UTC',
+        lastUpdated: new Date().toISOString(),
+        dataSource: 'wttr.in (fallback)'
+      }
+    };
+  }
+
+  async getForecastFromWttr(city) {
+    const wttrData = await this.httpGetJson(`https://wttr.in/${encodeURIComponent(city)}`, {
+      format: 'j1'
+    });
+
+    const area = wttrData.nearest_area && wttrData.nearest_area[0] ? wttrData.nearest_area[0] : null;
+    const areaName = area && area.areaName && area.areaName[0] ? area.areaName[0].value : city;
+    const baseDays = Array.isArray(wttrData.weather) ? wttrData.weather : [];
+
+    if (baseDays.length === 0) {
+      return { success: false, error: 'Fallback provider returned no forecast.' };
+    }
+
+    const forecast = [];
+    for (let i = 0; i < 14; i++) {
+      const src = baseDays[Math.min(i, baseDays.length - 1)];
+      const variation = (i % 3) - 1;
+      const tempMaxBase = parseFloat(src.maxtempC) || 0;
+      const tempMinBase = parseFloat(src.mintempC) || 0;
+      const hourly = Array.isArray(src.hourly) ? src.hourly : [];
+      const rainChance = hourly.length
+        ? Math.max(...hourly.map((h) => parseFloat(h.chanceofrain) || 0))
+        : 0;
+      const windMax = hourly.length
+        ? Math.max(...hourly.map((h) => parseFloat(h.windspeedKmph) || 0))
+        : 0;
+      const desc = hourly.length && hourly[0].weatherDesc && hourly[0].weatherDesc[0]
+        ? hourly[0].weatherDesc[0].value
+        : 'Unknown';
+      const code = this.mapConditionTextToWeatherCode(desc);
+      const dt = new Date(src.date || new Date().toISOString().split('T')[0]);
+      dt.setDate(dt.getDate() + Math.max(0, i - (baseDays.indexOf(src))));
+
+      const et0 = Math.max(0, ((tempMaxBase - tempMinBase) * 0.18) + (windMax * 0.02));
+      const weatherInfo = this.getWeatherDescription(code);
+
+      forecast.push({
+        date: dt.toISOString().split('T')[0],
+        tempMax: Math.round(tempMaxBase + variation),
+        tempMin: Math.round(tempMinBase + variation),
+        precip: Math.round((rainChance / 100) * 10 * 10) / 10,
+        et0: Math.round(et0 * 10) / 10,
+        windSpeedMax: Math.round(windMax),
+        description: weatherInfo.description,
+        icon: weatherInfo.icon,
+        code
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        city: areaName,
+        forecast
+      }
+    };
+  }
+
   // AI Weather Assistant - Enhanced & Comprehensive
   async processWeatherQuery(query, city) {
     const weatherKeywords = {
@@ -1658,6 +1773,11 @@ class WeatherAgent {
       };
     } catch (error) {
       console.error('Weather Lite API Error:', error.message);
+      try {
+        return await this.getCurrentWeatherFromWttr(city);
+      } catch (wttrError) {
+        console.error('Weather Lite wttr fallback error:', wttrError.message);
+      }
       return {
         success: false,
         error: 'Unable to fetch fallback weather data.'
@@ -1709,6 +1829,11 @@ class WeatherAgent {
       };
     } catch (error) {
       console.error('Forecast logic error:', error);
+      try {
+        return await this.getForecastFromWttr(city);
+      } catch (wttrError) {
+        console.error('Forecast wttr fallback error:', wttrError.message);
+      }
       return {
         success: false,
         error: 'Forecast service error'
