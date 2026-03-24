@@ -515,13 +515,14 @@ apiRouter.post('/agri-dashboard', async (req, res) => {
 // Compatibility GET endpoint for older cached frontend bundles.
 apiRouter.get('/agri-dashboard', async (req, res) => {
   try {
-    const city = (req.query.city || req.query.q || '').toString().trim();
-    if (!city) {
-      return res.status(400).json({
-        success: false,
-        error: 'City is required. Pass ?city=<city> or use POST /api/agri-dashboard.'
-      });
-    }
+    const requestedCity = (
+      req.query.city ||
+      req.query.q ||
+      req.query.name ||
+      req.query.search ||
+      ''
+    ).toString().trim();
+    const city = requestedCity || 'Delhi';
 
     const profile = {
       city,
@@ -538,7 +539,13 @@ apiRouter.get('/agri-dashboard', async (req, res) => {
     if (!forecastRes.success) return res.status(404).json(forecastRes);
 
     const dashboardData = AgriEngine.generateDashboard(currentRes.data, forecastRes.data, profile);
-    res.json({ success: true, data: dashboardData, compatibilityMode: 'get' });
+    res.json({
+      success: true,
+      data: dashboardData,
+      compatibilityMode: 'get',
+      usedDefaultCity: !requestedCity,
+      resolvedCity: city
+    });
   } catch (error) {
     console.error('Agri-Dashboard GET Compatibility Error:', error.message);
     res.status(500).json({ success: false, error: 'Dashboard generation failed' });
