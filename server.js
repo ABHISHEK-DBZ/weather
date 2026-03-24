@@ -1561,6 +1561,12 @@ class WeatherAgent {
       const coordsResult = await this.getCoordinates(city);
       
       if (!coordsResult.success) {
+        const wttrFallback = await this.getCurrentWeatherFromWttr(city);
+        if (wttrFallback.success) {
+          wttrFallback.data.accuracy = 'Fallback weather mode';
+          wttrFallback.data.googleCompatible = false;
+          return wttrFallback;
+        }
         return coordsResult;
       }
 
@@ -1731,6 +1737,10 @@ class WeatherAgent {
       const coordsResult = await this.getCoordinates(city);
 
       if (!coordsResult.success) {
+        const wttrFallback = await this.getCurrentWeatherFromWttr(city);
+        if (wttrFallback.success) {
+          return wttrFallback;
+        }
         return coordsResult;
       }
 
@@ -1790,6 +1800,10 @@ class WeatherAgent {
       const coordsResult = await this.getCoordinates(city);
       
       if (!coordsResult.success) {
+        const wttrFallback = await this.getForecastFromWttr(city);
+        if (wttrFallback.success) {
+          return wttrFallback;
+        }
         return coordsResult;
       }
 
