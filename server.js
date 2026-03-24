@@ -7,8 +7,12 @@ const AgriEngine = require('./agri_engine');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isDirectRun = require.main === module;
-const IS_API_ONLY = process.env.API_ONLY === 'true';
+const IS_API_ONLY = String(process.env.API_ONLY || '').toLowerCase() === 'true';
 const SERVER_START_TIME = Date.now();
+const CLIENT_DIST_DIR = path.join(__dirname, 'client', 'dist');
+const CLIENT_DIST_INDEX = path.join(CLIENT_DIST_DIR, 'index.html');
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const PUBLIC_INDEX = path.join(PUBLIC_DIR, 'index.html');
 
 // ─── Database Initialization (Hybrid Firestore/SQLite) ──────────────────────────
 const admin = require('firebase-admin');
@@ -632,8 +636,12 @@ app.use('/', apiRouter);
 
 // Serve static files only when this process is responsible for frontend hosting.
 if (!IS_API_ONLY) {
-  app.use(express.static(path.join(__dirname, 'client/dist')));
-  app.use(express.static('public'));
+  if (require('fs').existsSync(CLIENT_DIST_DIR)) {
+    app.use(express.static(CLIENT_DIST_DIR));
+  } else {
+    console.warn('[WARN] client/dist not found. Running backend without built frontend assets.');
+  }
+  app.use(express.static(PUBLIC_DIR));
 }
 app.set('trust proxy', true);
 
@@ -2018,7 +2026,13 @@ const weatherAgent = new WeatherAgent();
 
 // Routes
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  if (!IS_API_ONLY && require('fs').existsSync(CLIENT_DIST_INDEX)) {
+    return res.sendFile(CLIENT_DIST_INDEX);
+  }
+  if (require('fs').existsSync(PUBLIC_INDEX)) {
+    return res.sendFile(PUBLIC_INDEX);
+  }
+  return res.json({ success: true, message: 'Weather API is running', apiOnly: IS_API_ONLY });
 });
 
 // AI Weather Assistant Endpoint
@@ -2069,7 +2083,13 @@ app.get(['/api/weather/compare/:city', '/weather/compare/:city'], async (req, re
 // Final route: serve index.html for all other routes in full-stack mode.
 if (!IS_API_ONLY) {
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+    if (require('fs').existsSync(CLIENT_DIST_INDEX)) {
+      return res.sendFile(CLIENT_DIST_INDEX);
+    }
+    if (require('fs').existsSync(PUBLIC_INDEX)) {
+      return res.sendFile(PUBLIC_INDEX);
+    }
+    return res.status(404).json({ success: false, error: 'Frontend assets are not available on this deployment.' });
   });
 }
 
@@ -2077,7 +2097,7 @@ if (!IS_API_ONLY) {
 exports.api = functions.https.onRequest(app);
 
 // Local development listener
-if (process.env.NODE_ENV !== 'production' && !process.env.FUNCTIONS_EMULATOR) {
+if (isDirectRun && !process.env.FUNCTIONS_EMULATOR) {
   app.listen(PORT, () => {
     console.log(`🚀 3D Weather Platform server running on port ${PORT}`);
     console.log(`Visit http://localhost:${PORT} to use the app`);
