@@ -146,7 +146,20 @@ export default function AppScene() {
       {/* 3D Canvas */}
       <Canvas
         camera={{ position: [0, 0, 7], fov: 45 }}
-        gl={{ antialias: true, alpha: true }}
+        dpr={[1, 1.5]}
+        gl={{ antialias: true, alpha: true, powerPreference: 'high-performance', preserveDrawingBuffer: false }}
+        onCreated={({ gl }) => {
+          const canvas = gl.domElement;
+
+          canvas.addEventListener('webglcontextlost', (event) => {
+            event.preventDefault();
+            console.warn('WebGL context lost. Refreshing renderer state.');
+          });
+
+          canvas.addEventListener('webglcontextrestored', () => {
+            console.info('WebGL context restored.');
+          });
+        }}
         style={{ position: 'absolute', inset: 0 }}
       >
         <ambientLight intensity={0.35} />

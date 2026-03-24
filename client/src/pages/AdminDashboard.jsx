@@ -45,7 +45,7 @@ const styles = {
     opacity: 0.03,
     pointerEvents: 'none',
     zIndex: 1,
-    background: 'url("https://grainy-gradients.vercel.app/noise.svg")',
+    background: 'url("/noise.svg")',
   },
   glow: {
     position: 'fixed',

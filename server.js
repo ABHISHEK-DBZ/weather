@@ -508,6 +508,39 @@ apiRouter.post('/agri-dashboard', async (req, res) => {
   }
 });
 
+// Compatibility GET endpoint for older cached frontend bundles.
+apiRouter.get('/agri-dashboard', async (req, res) => {
+  try {
+    const city = (req.query.city || req.query.q || '').toString().trim();
+    if (!city) {
+      return res.status(400).json({
+        success: false,
+        error: 'City is required. Pass ?city=<city> or use POST /api/agri-dashboard.'
+      });
+    }
+
+    const profile = {
+      city,
+      cropType: req.query.cropType || 'General Crop',
+      growthStage: req.query.growthStage || 'Vegetative',
+      farmSize: req.query.farmSize || 'small',
+      irrigationMethod: req.query.irrigationMethod || 'drip'
+    };
+
+    const currentRes = await weatherAgent.getCurrentWeather(profile.city);
+    if (!currentRes.success) return res.status(404).json(currentRes);
+
+    const forecastRes = await weatherAgent.getForecast(profile.city);
+    if (!forecastRes.success) return res.status(404).json(forecastRes);
+
+    const dashboardData = AgriEngine.generateDashboard(currentRes.data, forecastRes.data, profile);
+    res.json({ success: true, data: dashboardData, compatibilityMode: 'get' });
+  } catch (error) {
+    console.error('Agri-Dashboard GET Compatibility Error:', error.message);
+    res.status(500).json({ success: false, error: 'Dashboard generation failed' });
+  }
+});
+
 // NEW POST: Agriculture-Only Export Engine (Feature 9)
 apiRouter.post('/agri-export', async (req, res) => {
   try {
