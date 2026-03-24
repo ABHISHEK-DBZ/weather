@@ -416,7 +416,7 @@ apiRouter.post('/ai-chat', async (req, res) => {
 
         if (fallbackWeather.success) {
           const weather = fallbackWeather.data;
-          firestoreAdd({
+          universalAdd(LOG_COLLECTION, {
             searchQuery: `AI(Fallback): ${query}`,
             userIp: req.ip || '127.0.0.1',
             weatherResult: weather.description,
@@ -643,6 +643,37 @@ class WeatherAgent {
     this.geoApiUrl = 'https://geocoding-api.open-meteo.com/v1/search';
     this.weatherApiUrl = 'https://api.open-meteo.com/v1/forecast';
     this.airQualityUrl = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+  }
+
+  async httpGetJson(baseUrl, params = {}, timeoutMs = 15000) {
+    const url = new URL(baseUrl);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        url.searchParams.set(key, String(value));
+      }
+    });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'Weather-Agent/1.0'
+        },
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} from ${baseUrl}`);
+      }
+
+      return await response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   // AI Weather Assistant - Enhanced & Comprehensive
@@ -1332,8 +1363,6 @@ class WeatherAgent {
 
   async getCoordinates(city) {
     try {
-      const axios = require('axios');
-      
       // Validate city input
       if (!city || typeof city !== 'string' || city.trim() === '') {
         return {
@@ -1343,23 +1372,21 @@ class WeatherAgent {
       }
       
       // Enhanced geocoding with better search parameters for Google-like accuracy
-      const response = await axios.get(this.geoApiUrl, {
-        params: {
-          name: city.trim(),
-          count: 10, // Get more results for better matching
-          language: 'en',
-          format: 'json'
-        }
+      const geocodeData = await this.httpGetJson(this.geoApiUrl, {
+        name: city.trim(),
+        count: 10,
+        language: 'en',
+        format: 'json'
       });
       
-      if (response.data.results && response.data.results.length > 0) {
-        let bestResult = response.data.results[0];
+      if (geocodeData.results && geocodeData.results.length > 0) {
+        let bestResult = geocodeData.results[0];
         
         // Enhanced matching algorithm for Google Weather compatibility
         const cityLower = city.toLowerCase().trim();
         
         // Priority 1: Exact name match
-        for (const result of response.data.results) {
+        for (const result of geocodeData.results) {
           if (result.name.toLowerCase() === cityLower) {
             bestResult = result;
             break;
@@ -1368,7 +1395,7 @@ class WeatherAgent {
         
         // Priority 2: If no exact match, prefer major cities with higher population
         if (bestResult.name.toLowerCase() !== cityLower) {
-          for (const result of response.data.results) {
+          for (const result of geocodeData.results) {
             // Prefer places with higher administrative level (cities over villages)
             if (result.feature_code && ['PPL', 'PPLA', 'PPLA2', 'PPLA3', 'PPLC'].includes(result.feature_code)) {
               if (result.population && (!bestResult.population || result.population > bestResult.population)) {
@@ -1416,7 +1443,6 @@ class WeatherAgent {
 
   async getCurrentWeather(city) {
     try {
-      const axios = require('axios');
       const coordsResult = await this.getCoordinates(city);
       
       if (!coordsResult.success) {
@@ -1426,64 +1452,62 @@ class WeatherAgent {
       const { latitude, longitude, name, country } = coordsResult.data;
       
       // Enhanced API call with comprehensive weather parameters + timezone handling
-      const response = await axios.get(this.weatherApiUrl, {
-        params: {
-          latitude: latitude,
-          longitude: longitude,
-          models: 'best_match', // Use best available weather model
-          current: [
-            'temperature_2m',
-            'relative_humidity_2m', 
-            'apparent_temperature',
-            'weather_code',
-            'surface_pressure',
-            'wind_speed_10m',
-            'wind_direction_10m',
-            'cloud_cover',
-            'visibility',
-            'uv_index',
-            'is_day',
-            'precipitation'
-          ].join(','),
-          hourly: [
-            'temperature_2m',
-            'relative_humidity_2m',
-            'dew_point_2m',
-            'precipitation_probability',
-            'precipitation',
-            'weather_code',
-            'apparent_temperature',
-            'soil_moisture_3_to_9cm',
-            'soil_temperature_6cm',
-            'et0_fao_evapotranspiration',
-            'wind_speed_10m',
-            'uv_index'
-          ].join(','),
-          daily: [
-            'temperature_2m_max',
-            'temperature_2m_min',
-            'precipitation_sum',
-            'et0_fao_evapotranspiration_sum',
-            'weather_code'
-          ].join(','),
-          timezone: 'auto', // This ensures local timezone
-          forecast_days: 14,
-          temperature_unit: 'celsius',
-          wind_speed_unit: 'kmh',
-          precipitation_unit: 'mm',
-          timeformat: 'iso8601'
-        }
+      const response = await this.httpGetJson(this.weatherApiUrl, {
+        latitude: latitude,
+        longitude: longitude,
+        models: 'best_match',
+        current: [
+          'temperature_2m',
+          'relative_humidity_2m',
+          'apparent_temperature',
+          'weather_code',
+          'surface_pressure',
+          'wind_speed_10m',
+          'wind_direction_10m',
+          'cloud_cover',
+          'visibility',
+          'uv_index',
+          'is_day',
+          'precipitation'
+        ].join(','),
+        hourly: [
+          'temperature_2m',
+          'relative_humidity_2m',
+          'dew_point_2m',
+          'precipitation_probability',
+          'precipitation',
+          'weather_code',
+          'apparent_temperature',
+          'soil_moisture_3_to_9cm',
+          'soil_temperature_6cm',
+          'et0_fao_evapotranspiration',
+          'wind_speed_10m',
+          'uv_index'
+        ].join(','),
+        daily: [
+          'temperature_2m_max',
+          'temperature_2m_min',
+          'precipitation_sum',
+          'et0_fao_evapotranspiration_sum',
+          'weather_code'
+        ].join(','),
+        timezone: 'auto',
+        forecast_days: 14,
+        temperature_unit: 'celsius',
+        wind_speed_unit: 'kmh',
+        precipitation_unit: 'mm',
+        timeformat: 'iso8601'
       });
       
-      const current = response.data.current;
-      const hourly = response.data.hourly;
-      const daily = response.data.daily;
+      const current = response.current;
+      const hourly = response.hourly;
+      const daily = response.daily;
       const weatherCode = current.weather_code;
       const isDay = current.is_day === 1;
       const weatherInfo = this.getWeatherDescription(weatherCode, isDay);
       
       // Get current time in location's timezone (from API response)
-      const currentTimeString = response.data.current_time || new Date().toISOString();
+      const currentTimeString = response.current_time || new Date().toISOString();
       const currentTime = new Date(currentTimeString);
       const currentHour = currentTime.getHours();
       
@@ -1552,7 +1576,7 @@ class WeatherAgent {
           icon: weatherInfo.icon,
           recommendation: recommendation,
           accuracy: '🎯 Google Weather Compatible Data',
-          timezone: response.data.timezone || 'UTC',
+          timezone: response.timezone || 'UTC',
           coordinates: `${latitude}, ${longitude}`,
           dataSource: 'Open-Meteo API (High Resolution + Advanced Parameters)',
           googleCompatible: true,
@@ -1563,12 +1587,23 @@ class WeatherAgent {
             isDay: isDay,
             rawTemp: current.temperature_2m,
             processedTemp: currentTemp,
-            timezoneOffset: response.data.utc_offset_seconds || 0
+            timezoneOffset: response.utc_offset_seconds || 0
           }
         }
       };
     } catch (error) {
       console.error('Weather API Error:', error.message);
+      try {
+        const fallback = await this.getCurrentWeatherLite(city);
+        if (fallback.success) {
+          fallback.data.recommendation = fallback.data.recommendation || this.getWeatherRecommendation(fallback.data.temperature, fallback.data.description);
+          fallback.data.accuracy = 'Fallback weather mode';
+          fallback.data.googleCompatible = false;
+          return fallback;
+        }
+      } catch (fallbackError) {
+        console.error('Weather fallback error:', fallbackError.message);
+      }
       return {
         success: false,
         error: 'Unable to fetch accurate weather data. Please try again.'
@@ -1578,7 +1613,6 @@ class WeatherAgent {
 
   async getCurrentWeatherLite(city) {
     try {
-      const axios = require('axios');
       const coordsResult = await this.getCoordinates(city);
 
       if (!coordsResult.success) {
@@ -1586,23 +1620,21 @@ class WeatherAgent {
       }
 
       const { latitude, longitude, name, country } = coordsResult.data;
-      const response = await axios.get(this.weatherApiUrl, {
-        params: {
-          latitude,
-          longitude,
-          current: [
-            'temperature_2m',
-            'relative_humidity_2m',
-            'apparent_temperature',
-            'weather_code',
-            'wind_speed_10m',
-            'is_day'
-          ].join(','),
-          timezone: 'auto'
-        }
+      const response = await this.httpGetJson(this.weatherApiUrl, {
+        latitude,
+        longitude,
+        current: [
+          'temperature_2m',
+          'relative_humidity_2m',
+          'apparent_temperature',
+          'weather_code',
+          'wind_speed_10m',
+          'is_day'
+        ].join(','),
+        timezone: 'auto'
       });
 
-      const current = response.data.current;
+      const current = response.current;
       const weatherInfo = this.getWeatherDescription(current.weather_code, current.is_day === 1);
 
       return {
@@ -1620,7 +1652,7 @@ class WeatherAgent {
           icon: weatherInfo.icon,
           recommendation: this.getWeatherRecommendation(current.temperature_2m, weatherInfo.description),
           coordinates: `${latitude}, ${longitude}`,
-          timezone: response.data.timezone || 'UTC',
+          timezone: response.timezone || 'UTC',
           lastUpdated: current.time
         }
       };
@@ -1635,7 +1667,6 @@ class WeatherAgent {
 
   async getForecast(city) {
     try {
-      const axios = require('axios');
       const coordsResult = await this.getCoordinates(city);
       
       if (!coordsResult.success) {
@@ -1644,18 +1675,16 @@ class WeatherAgent {
 
       const { latitude, longitude, name } = coordsResult.data;
       
-      const response = await axios.get(this.weatherApiUrl, {
-        params: {
-          latitude,
-          longitude,
-          daily: 'temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration_sum,wind_speed_10m_max,weather_code',
-          timezone: 'auto',
-          forecast_days: 14,
-          wind_speed_unit: 'kmh'
-        }
+      const response = await this.httpGetJson(this.weatherApiUrl, {
+        latitude,
+        longitude,
+        daily: 'temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration_sum,wind_speed_10m_max,weather_code',
+        timezone: 'auto',
+        forecast_days: 14,
+        wind_speed_unit: 'kmh'
       });
       
-      const daily = response.data.daily;
+      const daily = response.daily;
       const forecast = daily.time.map((date, index) => {
         const weatherInfo = this.getWeatherDescription(daily.weather_code[index]);
         return {
